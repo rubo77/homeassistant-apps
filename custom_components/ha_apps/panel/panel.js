@@ -72,7 +72,7 @@ const PANEL_I18N = {
     "no_logs": "(no logs)",
     "disk_line": "Disk: {free} MB free / {total} MB",
     "disk_low_title": "Below {min} MB free — installations are blocked",
-    "count_line": "{shown} of {total} add-ons ({installed} installed)",
+    "count_line": "{shown} of {total} add-ons",
     "update_badge": "update available",
     "sup_badge_title": "Uses Supervisor APIs ({keys}) — may be limited",
     "verified_badge": "verified",
@@ -86,7 +86,29 @@ const PANEL_I18N = {
     "refresh_catalog": "Refresh catalog",
     "cancel": "Cancel",
     "port_btn": "Port {port}",
-    "busy": "…"
+    "busy": "…",
+    "count_installed": "({installed} installed)",
+    "f_all": "all",
+    "f_installable": "installable",
+    "f_installed": "installed",
+    "tip_repo_official": "from the official home-assistant/addons catalog",
+    "tip_repo_community": "from the community hassio-addons/repository catalog",
+    "tip_state": "container status: {state}",
+    "tip_state_running": "the container is running",
+    "tip_state_exited": "the container is stopped",
+    "tip_state_restarting": "the container keeps restarting — check Logs",
+    "tip_state_paused": "the container is paused",
+    "tip_state_created": "container created but never started",
+    "tip_cpu_lacks": "the CPU lacks the '{flag}' instruction set — this add-on would crash (SIGILL)",
+    "tip_unsupported": "cannot be installed on this machine: {reason}",
+    "tip_update": "a newer version is available — Update pulls it",
+    "tip_dl_size": "estimated compressed download size",
+    "tip_disk": "free disk space under {dir}",
+    "remove_title": "Remove \"{name}\"?",
+    "remove_keep": "Keep data",
+    "remove_purge": "Delete data too",
+    "remove_keep_hint": "Settings and files under /data are kept — a reinstall restores them.",
+    "remove_purge_hint": "Settings and files under /data are deleted permanently."
   },
   "de": {
     "loading_catalog": "Lade Katalog …",
@@ -156,7 +178,7 @@ const PANEL_I18N = {
     "no_logs": "(keine Logs)",
     "disk_line": "Disk: {free} MB frei / {total} MB",
     "disk_low_title": "Unter {min} MB frei — Installationen werden blockiert",
-    "count_line": "{shown} von {total} Add-ons ({installed} installiert)",
+    "count_line": "{shown} von {total} Add-ons",
     "update_badge": "update verfügbar",
     "sup_badge_title": "Nutzt Supervisor-APIs ({keys}) — evtl. eingeschränkt",
     "verified_badge": "getestet",
@@ -170,7 +192,29 @@ const PANEL_I18N = {
     "refresh_catalog": "Katalog aktualisieren",
     "cancel": "Abbrechen",
     "port_btn": "Port {port}",
-    "busy": "…"
+    "busy": "…",
+    "count_installed": "({installed} installiert)",
+    "f_all": "alle",
+    "f_installable": "installierbar",
+    "f_installed": "installiert",
+    "tip_repo_official": "aus dem offiziellen home-assistant/addons-Katalog",
+    "tip_repo_community": "aus dem Community-Katalog hassio-addons/repository",
+    "tip_state": "Container-Status: {state}",
+    "tip_state_running": "der Container läuft",
+    "tip_state_exited": "der Container ist gestoppt",
+    "tip_state_restarting": "der Container startet ständig neu — Logs prüfen",
+    "tip_state_paused": "der Container ist pausiert",
+    "tip_state_created": "Container erstellt, aber nie gestartet",
+    "tip_cpu_lacks": "der CPU fehlt der '{flag}'-Befehlssatz — das Add-on würde abstürzen (SIGILL)",
+    "tip_unsupported": "auf diesem Rechner nicht installierbar: {reason}",
+    "tip_update": "eine neuere Version ist verfügbar — Update lädt sie",
+    "tip_dl_size": "geschätzte komprimierte Downloadgröße",
+    "tip_disk": "freier Speicherplatz unter {dir}",
+    "remove_title": "„{name}\" entfernen?",
+    "remove_keep": "Daten behalten",
+    "remove_purge": "Daten ebenfalls löschen",
+    "remove_keep_hint": "Einstellungen und Dateien unter /data bleiben erhalten — eine Neuinstallation stellt sie wieder her.",
+    "remove_purge_hint": "Einstellungen und Dateien unter /data werden dauerhaft gelöscht."
   }
 };
 
@@ -182,6 +226,7 @@ class HaAppsPanel extends HTMLElement {
     this._addons = [];
     this._filter = "";
     this._repo = "all";
+    this._stateFilter = "all";
     this._busy = new Set();
   }
 
@@ -289,6 +334,30 @@ class HaAppsPanel extends HTMLElement {
       this._action(a.slug, "install");
     });
     dlg.querySelector("#dlgcancel").onclick = () => dlg.close();
+  }
+
+  _confirmRemove(a) {
+    const dlg = this.shadowRoot.querySelector("#rmdlg");
+    dlg.querySelector(".dlgbody").innerHTML = `
+      <h3>${this._t("remove_title", {name: a.name})}</h3>
+      <div class="notebox"><strong>${this._t("remove_keep")}</strong> — ${this._t("remove_keep_hint")}</div>
+      <div class="warnbox" style="margin-top:8px"><strong>${this._t("remove_purge")}</strong> — ${this._t("remove_purge_hint")}</div>`;
+    dlg.showModal();
+    const wire = (id, fn) => {
+      const el = dlg.querySelector(id);
+      const fresh = el.cloneNode(true);
+      el.replaceWith(fresh);
+      fresh.addEventListener("click", fn);
+    };
+    wire("#rmkeep", () => {
+      dlg.close();
+      this._action(a.slug, "remove", false);
+    });
+    wire("#rmpurge", () => {
+      dlg.close();
+      this._action(a.slug, "remove", true);
+    });
+    wire("#rmcancel", () => dlg.close());
   }
 
   async _action(slug, action, purge = false) {
@@ -454,8 +523,7 @@ class HaAppsPanel extends HTMLElement {
         } else if (act === "install") {
           this._confirmInstall(a);
         } else if (act === "remove") {
-          if (confirm(this._t("really_remove", {name: a.name})))
-            await this._action(a.slug, "remove");
+          await this._confirmRemove(a);
         } else {
           await this._action(a.slug, act);
         }
@@ -471,7 +539,7 @@ class HaAppsPanel extends HTMLElement {
 
   _actionButtons(a) {
     const buttons = [];
-    if (!a.supported) {
+    if (!a.installed && !a.supported) {
       return `<span class="badge err">${a.unsupported_reason || this._t("not_supported")}</span>`;
     }
     if (!a.installed) {
@@ -541,6 +609,9 @@ class HaAppsPanel extends HTMLElement {
       .filter(
         (a) =>
           (this._repo === "all" || a.repo === this._repo) &&
+          (this._stateFilter === "all" ||
+            (this._stateFilter === "installable" && a.supported) ||
+            (this._stateFilter === "installed" && a.installed)) &&
           (!q ||
             a.name.toLowerCase().includes(q) ||
             a.slug.includes(q) ||
@@ -552,8 +623,16 @@ class HaAppsPanel extends HTMLElement {
   _renderList() {
     const list = this._filtered();
     const grid = this.shadowRoot.querySelector("#grid");
-    this.shadowRoot.querySelector("#status").textContent =
-      this._t("count_line", {shown: list.length, total: this._addons.length, installed: this._addons.filter((a) => a.installed).length});
+    const st = this.shadowRoot.querySelector("#status");
+    st.innerHTML =
+      this._t("count_line", {shown: list.length, total: this._addons.length}) +
+      ` <a href="#" id="instlink">${this._t("count_installed", {installed: this._addons.filter((a) => a.installed).length})}</a>`;
+    st.querySelector("#instlink").addEventListener("click", (e) => {
+      e.preventDefault();
+      this._stateFilter = "installed";
+      this.shadowRoot.querySelector("#stateflt").value = "installed";
+      this._renderList();
+    });
     grid.innerHTML = "";
     for (const a of list) grid.appendChild(this._card(a));
   }
@@ -563,31 +642,41 @@ class HaAppsPanel extends HTMLElement {
     const card = document.createElement("div");
     card.className = "card" + (a.supported ? "" : " unsupported");
     const badges = [];
-    badges.push(`<span class="badge repo-${a.repo}">${a.repo}</span>`);
+    const tip = (s) => ` title="${s.replace(/"/g, "&quot;")}" data-tip="${s.replace(/"/g, "&quot;")}"`;
+    badges.push(
+      `<span class="badge repo-${a.repo}"${tip(this._t("tip_repo_" + a.repo) === "tip_repo_" + a.repo ? a.repo : this._t("tip_repo_" + a.repo))}>${a.repo}</span>`
+    );
     if (a.installed) {
+      const stateTip =
+        this._t("tip_state_" + a.state) === "tip_state_" + a.state
+          ? this._t("tip_state", {state: a.state})
+          : this._t("tip_state_" + a.state);
       badges.push(
-        `<span class="badge ${a.state === "running" ? "ok" : "warn"}">${a.state}</span>`
+        `<span class="badge ${a.state === "running" ? "ok" : "warn"}"${tip(stateTip)}>${a.state}</span>`
       );
       if (a.update_available)
-        badges.push(`<span class="badge upd">${this._t("update_badge")}</span>`);
+        badges.push(`<span class="badge upd"${tip(this._t("tip_update"))}>${this._t("update_badge")}</span>`);
     }
     if (a.special)
       badges.push(
-        `<span class="badge special" title="${this._t("verified_title")}">${this._t("verified_badge")}</span>`
+        `<span class="badge special"${tip(this._t("verified_title"))}>${this._t("verified_badge")}</span>`
       );
     if (a.needs_supervisor && a.needs_supervisor.length)
       badges.push(
-        `<span class="badge sup" title="${this._t("sup_badge_title", {keys: a.needs_supervisor.join(", ")})}">supervisor</span>`
+        `<span class="badge sup"${tip(this._t("sup_badge_title", {keys: a.needs_supervisor.join(", ")}))}>supervisor</span>`
       );
-    if (!a.supported)
+    if (!a.supported) {
+      const reason = a.unsupported_reason || this._t("not_supported");
+      const m = /^cpu lacks (.+)$/.exec(reason);
       badges.push(
-        `<span class="badge err">${a.unsupported_reason || this._t("not_supported")}</span>`
+        `<span class="badge err"${tip(m ? this._t("tip_cpu_lacks", {flag: m[1]}) : this._t("tip_unsupported", {reason}))}>${reason}</span>`
       );
+    }
 
     const buttons = [];
     if (busy) {
       buttons.push("<button disabled>…</button>");
-    } else if (!a.supported) {
+    } else if (!a.installed && !a.supported) {
       /* no actions */
     } else if (!a.installed) {
       buttons.push(
@@ -620,6 +709,11 @@ class HaAppsPanel extends HTMLElement {
     card.style.cursor = "pointer";
     card.addEventListener("click", (e) => {
       if (e.target.closest("button")) return;
+      const tipEl = e.target.closest("[data-tip]");
+      if (tipEl) {
+        this._toast(tipEl.dataset.tip);
+        return;
+      }
       this._openDetail(a.slug);
     });
     card.innerHTML = `
@@ -659,8 +753,7 @@ class HaAppsPanel extends HTMLElement {
         } else if (act === "install") {
           this._confirmInstall(a);
         } else if (act === "remove") {
-          if (confirm(this._t("really_remove", {name: a.name}) + "\n" + this._t("data_kept")))
-            this._action(a.slug, "remove");
+          this._confirmRemove(a);
         } else {
           this._action(a.slug, act);
         }
@@ -706,6 +799,7 @@ class HaAppsPanel extends HTMLElement {
       button.danger { color:#f87171; border-color:#7f1d1d; }
       button:disabled { opacity:.5; cursor:default; }
       #status { font-size:13px; opacity:.7; margin-bottom:10px; }
+      #status a { color:var(--primary-color,#03a9f4); }
       .disk { font-size:12px; opacity:.8; padding:6px 10px; border-radius:8px; background:#333; }
       .disk.low { background:#b91c1c; color:#fff; opacity:1; }
       #toast { position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:#222; border:1px solid #555; padding:10px 18px; border-radius:10px; max-width:80%; white-space:pre-wrap; opacity:0; transition:opacity .2s; pointer-events:none; z-index:10; font-size:13px; }
@@ -746,6 +840,11 @@ class HaAppsPanel extends HTMLElement {
         <option value="official">${this._t("official")}</option>
         <option value="community">${this._t("community")}</option>
       </select>
+      <select id="stateflt">
+        <option value="all">${this._t("f_all")}</option>
+        <option value="installable">${this._t("f_installable")}</option>
+        <option value="installed">${this._t("f_installed")}</option>
+      </select>
       <span id="disk" class="disk"></span>
       <button id="refresh">${this._t("refresh_catalog")}</button>
     </div>
@@ -758,7 +857,11 @@ class HaAppsPanel extends HTMLElement {
     <dialog id="logdlg"><button class="close" onclick="this.closest('dialog').close()">✕</button><h3></h3><pre></pre></dialog>
     <dialog id="instdlg"><div class="dlgbody"></div>
       <div class="dlgbtns"><button id="dlgcancel">${this._t("cancel")}</button>
-      <button id="dlggo" class="primary">${this._t("install")}</button></div></dialog>`;
+      <button id="dlggo" class="primary">${this._t("install")}</button></div></dialog>
+    <dialog id="rmdlg"><div class="dlgbody"></div>
+      <div class="dlgbtns"><button id="rmcancel">${this._t("cancel")}</button>
+      <button id="rmpurge" class="danger">${this._t("remove_purge")}</button>
+      <button id="rmkeep" class="primary">${this._t("remove_keep")}</button></div></dialog>`;
     this.shadowRoot.querySelector("#q").addEventListener("input", (e) => {
       this._filter = e.target.value;
       this._showList();
@@ -766,6 +869,11 @@ class HaAppsPanel extends HTMLElement {
     });
     this.shadowRoot.querySelector("#repo").addEventListener("change", (e) => {
       this._repo = e.target.value;
+      this._showList();
+      this._renderList();
+    });
+    this.shadowRoot.querySelector("#stateflt").addEventListener("change", (e) => {
+      this._stateFilter = e.target.value;
       this._showList();
       this._renderList();
     });
