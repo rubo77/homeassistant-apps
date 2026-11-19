@@ -90,12 +90,13 @@ const PANEL_I18N = {
     "count_installed": "({installed} installed)",
     "filter_btn": "Filter",
     "f_all": "all",
+    "filter_hint": "click: include → exclude → off",
     "f_installed": "installed",
     "f_installable": "installable",
     "f_not_installable": "not installable",
     "f_running": "running",
     "f_stopped": "stopped",
-    "f_supervisor": "needs supervisor",
+    "f_supervisor": "supervisor",
     "f_special": "tested",
     "f_update": "update available",
     "tip_repo_official": "from the official home-assistant/addons catalog",
@@ -205,12 +206,13 @@ const PANEL_I18N = {
     "count_installed": "({installed} installiert)",
     "filter_btn": "Filter",
     "f_all": "alle",
+    "filter_hint": "Klick: einschließen → ausschließen → aus",
     "f_installed": "installiert",
     "f_installable": "installierbar",
     "f_not_installable": "nicht installierbar",
     "f_running": "läuft",
     "f_stopped": "gestoppt",
-    "f_supervisor": "braucht supervisor",
+    "f_supervisor": "supervisor",
     "f_special": "getestet",
     "f_update": "update verfügbar",
     "tip_repo_official": "aus dem offiziellen home-assistant/addons-Katalog",
@@ -255,7 +257,7 @@ class HaAppsPanel extends HTMLElement {
     this._addons = [];
     this._filter = "";
     this._repo = "all";
-    this._tags = new Set();
+    this._tags = new Map();
     this._busy = new Set();
   }
 
@@ -631,7 +633,10 @@ class HaAppsPanel extends HTMLElement {
     const menu = this.shadowRoot.querySelector("#fltmenu");
     if (!menu) return;
     menu.querySelectorAll('input[type=checkbox]').forEach((c) => {
-      c.checked = c.value === "all" ? this._tags.size === 0 : this._tags.has(c.value);
+      const v = this._tags.get(c.value) || 0;
+      c.checked = c.value === "all" ? this._tags.size === 0 : v === 1;
+      c.indeterminate = c.value !== "all" && v === -1;
+      c.parentElement.classList.toggle("excl", v === -1);
     });
     const btn = this.shadowRoot.querySelector("#fltbtn");
     btn.textContent = this._t("filter_btn") + (this._tags.size ? ` (${this._tags.size}) ▾` : " ▾");
@@ -648,7 +653,8 @@ class HaAppsPanel extends HTMLElement {
       .filter(
         (a) =>
           (this._repo === "all" || a.repo === this._repo) &&
-          [...this._tags].every((t) => TAG_FILTERS[t](a)) &&
+          [...this._tags].every(([t, v]) =>
+            (v === 1 ? TAG_FILTERS[t](a) : !TAG_FILTERS[t](a))) &&
           (!q ||
             a.name.toLowerCase().includes(q) ||
             a.slug.includes(q) ||
@@ -666,7 +672,7 @@ class HaAppsPanel extends HTMLElement {
       ` <a href="#" id="instlink">${this._t("count_installed", {installed: this._addons.filter((a) => a.installed).length})}</a>`;
     st.querySelector("#instlink").addEventListener("click", (e) => {
       e.preventDefault();
-      this._tags = new Set(["installed"]);
+      this._tags = new Map([["installed", 1]]);
       this._syncFilterMenu();
       this._renderList();
     });
@@ -843,6 +849,10 @@ class HaAppsPanel extends HTMLElement {
       #fltwrap { position:relative; }
       #fltmenu { position:absolute; top:110%; left:0; z-index:5; background:#222; border:1px solid #555; border-radius:8px; padding:8px 10px; display:flex; flex-direction:column; gap:6px; min-width:170px; box-shadow:0 4px 14px #0008; }
       #fltmenu label { display:flex; gap:8px; align-items:center; font-size:13px; white-space:nowrap; cursor:pointer; }
+      #fltmenu label.excl { color:#f87171; text-decoration:line-through; }
+      #fltmenu input:indeterminate { accent-color:#b91c1c; }
+      #fltmenu input:checked:not([value=all]) { accent-color:#15803d; }
+      #fltmenu .flthint { font-size:11px; opacity:.55; margin-top:4px; }
       #toast { position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:#222; border:1px solid #555; padding:10px 18px; border-radius:10px; max-width:80%; white-space:pre-wrap; opacity:0; transition:opacity .2s; pointer-events:none; z-index:10; font-size:13px; }
       #toast.show { opacity:1; }
       #toast.err { border-color:#b91c1c; color:#fca5a5; }
@@ -888,6 +898,7 @@ class HaAppsPanel extends HTMLElement {
           <label><input type="checkbox" value="all" checked> ${this._t("f_all")}</label>
           ${Object.keys(TAG_FILTERS).map((t) =>
             `<label><input type="checkbox" value="${t}"> ${this._t("f_" + t)}</label>`).join("")}
+          <div class="flthint">${this._t("filter_hint")}</div>
         </div>
       </div>
       <span id="disk" class="disk"></span>
@@ -917,8 +928,34 @@ class HaAppsPanel extends HTMLElement {
       this._showList();
       this._renderList();
     });
-    this.shadowRoot.querySelector("#stateflt").addEventListener("change", (e) => {
-      this._stateFilter = e.target.value;
+    const fltwrap = this.shadowRoot.querySelector("#fltwrap");
+    const fltmenu = this.shadowRoot.querySelector("#fltmenu");
+    this.shadowRoot.querySelector("#fltbtn").addEventListener("click", () => {
+      fltmenu.hidden = !fltmenu.hidden;
+    });
+    /* composedPath sees through shadow boundaries/retargeting; the
+       document listener also catches clicks on the HA chrome outside
+       this custom element. _docClickBound guards double-binding. */
+    if (!this._docClickBound) {
+      this._docClickBound = true;
+      document.addEventListener("click", (e) => {
+        if (!e.composedPath().includes(fltwrap)) fltmenu.hidden = true;
+      });
+    }
+    /* "change" (not "click"): canceling click reverts the native
+       checked state after the handler — _tags is the source of truth,
+       the DOM is re-synced from it */
+    fltmenu.addEventListener("change", (e) => {
+      const cb = e.target.closest('input[type=checkbox]');
+      if (!cb) return;
+      if (cb.value === "all") {
+        this._tags.clear();
+      } else {
+        const cur = this._tags.get(cb.value) || 0;
+        const next = cur === 0 ? 1 : cur === 1 ? -1 : 0;
+        next === 0 ? this._tags.delete(cb.value) : this._tags.set(cb.value, next);
+      }
+      this._syncFilterMenu();
       this._showList();
       this._renderList();
     });

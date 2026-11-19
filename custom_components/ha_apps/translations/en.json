@@ -121,8 +121,9 @@
     "f_not_installable": "not installable",
     "f_running": "running",
     "f_stopped": "stopped",
-    "f_supervisor": "needs supervisor",
+    "f_supervisor": "supervisor",
     "f_special": "tested",
-    "f_update": "update available"
+    "f_update": "update available",
+    "filter_hint": "click: include → exclude → off"
   }
 }
