@@ -11,6 +11,7 @@ import argparse
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -339,6 +340,31 @@ def normalize(slug, repo_name, cfg, addon_dir, arch):
         supported, reason = False, f"cpu lacks {cpu_flag}"
     image = cfg.get("image")
     version = str(cfg.get("version", ""))
+    if supported:
+        hw = missing_hardware(cfg)
+        if hw:
+            supported, reason = False, "missing " + " + ".join(hw)
+    if supported:
+        machines = cfg.get("machine") or []
+        allowed = [m for m in machines if not str(m).startswith("!")]
+        denied = [str(m)[1:] for m in machines if str(m).startswith("!")]
+        mid = machine_id()
+        if allowed and mid not in allowed:
+            supported, reason = False, f"needs machine {allowed}"
+        elif mid in denied:
+            supported, reason = False, f"excluded on {mid}"
+    if supported:
+        # device lists enumerate options (plex: /dev/dri, card0, card1) —
+        # only block when none of the declared sources exists
+        devs = [str(d).split(":")[0] for d in cfg.get("devices") or []]
+        devs = [d for d in devs if d]
+        if devs and not any(os.path.exists(d) for d in devs):
+            supported, reason = False, f"missing device {devs[0]}"
+    if supported and cfg.get("homeassistant"):
+        req = _ver_tuple(cfg["homeassistant"])
+        have = _ver_tuple(os.environ.get("HA_VERSION", ""))
+        if req and have and have < req:
+            supported, reason = False, f"needs HA >= {cfg['homeassistant']}"
     build_dir = None
     if cfg.get("build") or (addon_dir / "Dockerfile").exists():
         # built locally from the repo's Dockerfile, not pulled
@@ -631,6 +657,14 @@ def enrich(addons):
         addon["state"] = (
             "running" if running else ("stopped" if cname in states else None)
         )
+        webui = addon.get("webui") or ""
+        if "[HOST]" in webui:
+            url = webui.replace("[HOST]", host_addr())
+            for cport, hport in (addon.get("ports") or {}).items():
+                cp = cport.split("/")[0]
+                url = url.replace(f"[PORT:{cp}]", str(hport or cp))
+            url = re.sub(r"\[PORT:(\d+)\]", r"\1", url)
+            addon["webui_url"] = url
         if meta:
             addon["installed_version"] = meta.get("version")
             addon["webui_port"] = meta.get("webui_port")
@@ -813,6 +847,71 @@ def cmd_install(args):
     print(f"[ha-apps] {args.slug} installed (container {cname})")
 
 
+def machine_id():
+    """Machine identifier for add-on `machine:` requirements. On plain
+    Linux hosts there is no Supervisor machine concept — report a
+    generic id matching the CPU arch."""
+    import glob as _glob
+    model = ""
+    for f in _glob.glob("/proc/device-tree/model"):
+        try:
+            model = open(f).read().strip("\x00").lower()
+            break
+        except OSError:
+            pass
+    if "raspberry pi" in model:
+        return "raspberrypi" + ("4" if "4" in model else "5" if "5" in model else "3") + "-64"
+    return os.environ.get(
+        "HA_APPS_MACHINE",
+        {"x86_64": "generic-x86-64", "aarch64": "generic-aarch64"}.get(
+            platform.machine(), "generic-" + platform.machine()
+        ),
+    )
+
+
+def _has(pattern):
+    import glob as _glob
+    return bool(_glob.glob(pattern))
+
+
+def missing_hardware(cfg):
+    """Hardware the add-on needs that this host does not provide.
+    uart/usb/udev alone are only capability grants (ssh, vscode set them
+    without needing a device) — a missing serial adapter only blocks the
+    addons that also declare udev/usb device plumbing."""
+    missing = []
+    if cfg.get("gpio") and not _has("/dev/gpiochip*"):
+        missing.append("gpio")
+    if cfg.get("devicetree") and not os.path.isdir("/proc/device-tree"):
+        missing.append("devicetree")
+    if cfg.get("video") and not (_has("/dev/dri/renderD*") or _has("/dev/dri/card*")):
+        missing.append("video")
+    if (
+        cfg.get("uart")
+        and (cfg.get("usb") or cfg.get("udev"))
+        and not (_has("/dev/ttyUSB*") or _has("/dev/ttyACM*"))
+    ):
+        missing.append("serial adapter")
+    return missing
+
+
+def _ver_tuple(v):
+    m = re.match(r"(\d+)\.(\d+)(?:\.(\d+))?", str(v))
+    return tuple(int(g or 0) for g in m.groups()) if m else None
+
+
+def host_addr():
+    """Egress LAN IP of this host — what a browser on the network can
+    reach for published add-on ports."""
+    import socket
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sk:
+            sk.connect(("8.8.8.8", 80))
+            return sk.getsockname()[0]
+    except OSError:
+        return "127.0.0.1"
+
+
 def _wait_tcp(port, host="127.0.0.1", timeout=60):
     """Block until a TCP connect succeeds — the container needs a moment."""
     import socket
@@ -876,6 +975,7 @@ def cmd_status(args):
         "disk_free_mb": usage.free // 1_000_000,
         "disk_total_mb": usage.total // 1_000_000,
         "disk_dir": str(BASE_DIR),
+        "host_addr": host_addr(),
         "min_free_mb": MIN_FREE_BYTES // 1_000_000,
         "catalog_size": len(addons),
         "installed": [s for s in installed],

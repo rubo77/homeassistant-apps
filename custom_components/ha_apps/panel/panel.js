@@ -537,18 +537,12 @@ class HaAppsPanel extends HTMLElement {
     detail.querySelectorAll("button[data-act],button[data-port]").forEach((btn) => {
       btn.addEventListener("click", async () => {
         if (btn.dataset.port) {
-          window.open(
-            `${location.protocol}//${location.hostname}:${btn.dataset.port}/`,
-            "_blank"
-          );
+          window.open(this._portUrl(btn.dataset.port), "_blank");
           return;
         }
         const act = btn.dataset.act;
         if (act === "open") {
-          window.open(
-            `${location.protocol}//${location.hostname}:${a.webui_port}/`,
-            "_blank"
-          );
+          window.open(a.webui_url || this._portUrl(a.webui_port), "_blank");
         } else if (act === "logs") {
           this._showLogs(a.slug);
         } else if (act === "install") {
@@ -627,6 +621,11 @@ class HaAppsPanel extends HTMLElement {
       ? this._t("disk_low_title", {min: s.min_free_mb})
       : this._t("tip_disk", {dir: s.disk_dir || ""});
     this._diskLow = low;
+  }
+
+  _portUrl(port) {
+    const host = (this._status && this._status.host_addr) || location.hostname;
+    return `http://${host}:${port}/`;
   }
 
   _syncFilterMenu() {
@@ -779,18 +778,12 @@ class HaAppsPanel extends HTMLElement {
           return;
         }
         if (btn.dataset.port) {
-          window.open(
-            `${location.protocol}//${location.hostname}:${btn.dataset.port}/`,
-            "_blank"
-          );
+          window.open(this._portUrl(btn.dataset.port), "_blank");
           return;
         }
         const act = btn.dataset.act;
         if (act === "open") {
-          window.open(
-            `${location.protocol}//${location.hostname}:${a.webui_port}/`,
-            "_blank"
-          );
+          window.open(a.webui_url || this._portUrl(a.webui_port), "_blank");
         } else if (act === "logs") {
           this._showLogs(a.slug);
         } else if (act === "install") {

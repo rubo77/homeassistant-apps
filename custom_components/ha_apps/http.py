@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
+
+from homeassistant.const import __version__
 from http import HTTPStatus
 from pathlib import Path
 
@@ -40,11 +43,13 @@ async def _run_cli(hass: HomeAssistant, timeout: int, *cli_args: str):
 
     def _exec():
         try:
+            env = dict(os.environ, HA_VERSION=__version__)
             proc = subprocess.run(
                 [*CLI_CMD, *cli_args],
                 capture_output=True,
                 text=True,
                 timeout=timeout,
+                env=env,
             )
         except subprocess.TimeoutExpired:
             return 124, "", f"ha-apps timed out after {timeout}s"

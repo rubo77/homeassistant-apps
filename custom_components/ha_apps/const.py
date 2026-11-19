@@ -17,5 +17,5 @@ CLI_CMD = (
 REPOS_DIR = os.environ.get("HA_APPS_DIR", "/var/lib/ha_apps") + "/repos"
 PANEL_JS_URL = "/api/ha_apps/panel.js"
 # bump on every panel.js change — the module_url is cached aggressively
-PANEL_JS_VERSION = "0.2.13"
+PANEL_JS_VERSION = "0.2.14"
 PANEL_URL_PATH = "ha-apps"
