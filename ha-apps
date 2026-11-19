@@ -1,0 +1,36 @@
+#!/bin/bash
+# ha-apps — Supervisor-free add-on store for Home Assistant Core
+# (Debian/Ubuntu/Raspbian). Thin wrapper around ha-apps.py: picks a
+# python with PyYAML (system python3, else the HA venv) and forwards
+# all arguments.
+# Usage: bash dev/ha-apps <command> [args]   (run with -h|--help)
+#   update-catalog | list | info | install | remove | start | stop |
+#   update | logs | doctor
+# On nebelhaufen the same file lives at /usr/local/bin/ha-apps with the
+# python lib at /usr/local/lib/ha-apps/ha-apps.py.
+
+set -e
+
+SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [ -f "$SELF_DIR/ha-apps.py" ]; then
+    LIB="$SELF_DIR/ha-apps.py"
+else
+    LIB="/usr/local/lib/ha-apps/ha-apps.py"
+fi
+
+if [ ! -f "$LIB" ]; then
+    echo "❌ ha-apps.py not found (looked in $SELF_DIR and /usr/local/lib/ha-apps)" >&2
+    exit 1
+fi
+
+PYBIN="python3"
+if ! python3 -c 'import yaml' 2>/dev/null; then
+    if [ -x /opt/homeassistant/venv/bin/python ]; then
+        PYBIN="/opt/homeassistant/venv/bin/python"
+    else
+        echo "❌ no python with PyYAML — apt install python3-yaml" >&2
+        exit 1
+    fi
+fi
+
+exec "$PYBIN" "$LIB" "$@"

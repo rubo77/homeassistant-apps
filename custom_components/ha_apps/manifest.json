@@ -1,0 +1,11 @@
+{
+  "domain": "ha_apps",
+  "name": "HA Apps",
+  "codeowners": ["@rubo77"],
+  "config_flow": true,
+  "documentation": "https://github.com/rubo77/homeassistant-apps",
+  "integration_type": "service",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/rubo77/homeassistant-apps/issues",
+  "version": "0.2.0"
+}
