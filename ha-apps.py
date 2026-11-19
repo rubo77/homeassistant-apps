@@ -36,6 +36,12 @@ REPOS = {
     "community": "https://github.com/hassio-addons/repository",
 }
 
+# extra catalog source: a local add-on repo dir (*/config.yaml) that is
+# not git-managed — own/experimental add-ons live here
+LOCAL_REPO_DIR = Path(
+    os.environ.get("HA_APPS_LOCAL_REPO", str(BASE_DIR / "local"))
+)
+
 CONTAINER_PREFIX = "ha_apps_"
 
 
@@ -193,8 +199,9 @@ def scan_catalog():
     """Parse every */config.{yaml,json} in the cached repos into a dict."""
     addons = {}
     arch = host_arch()
-    for repo_name in REPOS:
-        repo_dir = REPOS_DIR / repo_name
+    repo_dirs = {name: REPOS_DIR / name for name in REPOS}
+    repo_dirs["local"] = LOCAL_REPO_DIR
+    for repo_name, repo_dir in repo_dirs.items():
         if not repo_dir.is_dir():
             continue
         for cfg_path in sorted(repo_dir.glob("*/config.y*ml")) + sorted(
@@ -276,6 +283,19 @@ POST_INSTALL_NOTES = {
         "the \"model\" option, stored in the add-on data directory",
         "Then select Whisper as STT in Settings → Voice assistants",
     ],
+    "tidal": [
+        "Log in to Tidal once: browse Tidal in the Iris UI (port 6680), "
+        "watch 'ha-apps logs tidal' for the login.tidal.com URL, open it "
+        "in a browser on this host (port 8989 must reach the container — "
+        "from a remote browser use 'ssh -L 8989:localhost:8989 <host>' "
+        "first) and authorize. The session is kept in the add-on data "
+        "directory",
+        "Audio plays through this host's sound card (/dev/snd) — pick "
+        "the ALSA device via the 'audio_device' option if 'default' "
+        "is not the right one",
+        "The Iris web UI on port 6680 controls playback; Tidal "
+        "requires a paid subscription",
+    ],
     "esphome": [
         "In HA: Settings → Devices & services → + Add integration → \"ESPHome\" — enter the add-on dashboard address and port",
         "Devices must be added via DHCP or manual discovery; automatic add-on discovery is absent",
@@ -319,7 +339,14 @@ def normalize(slug, repo_name, cfg, addon_dir, arch):
         supported, reason = False, f"cpu lacks {cpu_flag}"
     image = cfg.get("image")
     version = str(cfg.get("version", ""))
-    if not image:
+    build_dir = None
+    if cfg.get("build") or (addon_dir / "Dockerfile").exists():
+        # built locally from the repo's Dockerfile, not pulled
+        build_dir = str(addon_dir)
+        image_resolved = image or f"ha-apps-local/{slug}"
+        if ":" not in image_resolved.rsplit("/", 1)[-1] and version:
+            image_resolved += f":{version}"
+    elif not image:
         if supported:
             supported, reason = False, "no prebuilt image"
         image_resolved = None
@@ -357,6 +384,7 @@ def normalize(slug, repo_name, cfg, addon_dir, arch):
         "description": cfg.get("description", ""),
         "url": cfg.get("url", ""),
         "image": image_resolved,
+        "build_dir": build_dir,
         "supported": supported,
         "unsupported_reason": reason,
         "needs_supervisor": needs_sup,
@@ -450,6 +478,8 @@ def build_run_args(addon, slug, extra_ports=()):
             args += ["-v", f"{host_path}:{container_path}:{mode}"]
         elif key in HOST_PASSTHROUGH:
             args += ["-v", f"{HOST_PASSTHROUGH[key]}:{HOST_PASSTHROUGH[key]}:{mode}"]
+    for dev in cfg.get("devices") or []:
+        args += ["--device", dev]
     for key, value in (cfg.get("environment") or {}).items():
         args += ["-e", f"{key}={value}"]
     options = cfg.get("options")
@@ -489,7 +519,9 @@ def prefetch_sizes(workers=8):
     images = {
         a["image"]
         for a in scan_catalog().values()
-        if a.get("image") and _size_cache(a["image"]) == "miss"
+        if a.get("image")
+        and not a.get("build_dir")
+        and _size_cache(a["image"]) == "miss"
     }
     if not images:
         return
@@ -639,8 +671,10 @@ def cmd_list(args):
 def find_addon(slug):
     """Normalize one add-on without scanning the whole catalog."""
     arch = host_arch()
-    for repo_name in REPOS:
-        addon_dir = REPOS_DIR / repo_name / slug
+    search_dirs = {name: REPOS_DIR / name for name in REPOS}
+    search_dirs["local"] = LOCAL_REPO_DIR
+    for repo_name, repo_dir in search_dirs.items():
+        addon_dir = repo_dir / slug
         for cfg_path in (
             addon_dir / "config.yaml",
             addon_dir / "config.yml",
@@ -700,33 +734,37 @@ def cmd_install(args):
             f"({', '.join(addon['needs_supervisor'])}) — may not fully work\n"
         )
     image = addon["image"]
-    print(f"[ha-apps] checking image manifest for {host_arch()} ...")
-    inspect = run(
-        [DOCKER, "manifest", "inspect", image], capture=True, check=False
-    )
-    if inspect.returncode != 0:
-        sys.exit(
-            f"ha-apps: image {image} has no manifest for this host — "
-            f"the add-on is listed but likely cannot run here "
-            f"({inspect.stderr.strip()[:200]})"
+    if addon.get("build_dir"):
+        print(f"[ha-apps] building {image} from {addon['build_dir']} ...")
+        run([DOCKER, "build", "--network", "host", "-t", image, addon["build_dir"]])
+    else:
+        print(f"[ha-apps] checking image manifest for {host_arch()} ...")
+        inspect = run(
+            [DOCKER, "manifest", "inspect", image], capture=True, check=False
         )
-    try:
-        manifest = json.loads(inspect.stdout)
-    except json.JSONDecodeError:
-        manifest = {}
-    manifests = manifest.get("manifests") or []
-    if manifests:
-        archs = {
-            (m.get("platform") or {}).get("architecture")
-            for m in manifests
-        }
-        if host_arch() not in archs:
+        if inspect.returncode != 0:
             sys.exit(
-                f"ha-apps: {image} is not built for {host_arch()} "
-                f"(available: {', '.join(sorted(a for a in archs if a))})"
+                f"ha-apps: image {image} has no manifest for this host — "
+                f"the add-on is listed but likely cannot run here "
+                f"({inspect.stderr.strip()[:200]})"
             )
-    print(f"[ha-apps] pulling {image} ...")
-    run([DOCKER, "pull", image])
+        try:
+            manifest = json.loads(inspect.stdout)
+        except json.JSONDecodeError:
+            manifest = {}
+        manifests = manifest.get("manifests") or []
+        if manifests:
+            archs = {
+                (m.get("platform") or {}).get("architecture")
+                for m in manifests
+            }
+            if host_arch() not in archs:
+                sys.exit(
+                    f"ha-apps: {image} is not built for {host_arch()} "
+                    f"(available: {', '.join(sorted(a for a in archs if a))})"
+                )
+        print(f"[ha-apps] pulling {image} ...")
+        run([DOCKER, "pull", image])
     ensure_network()
     ensure_stub()
     if args.option:
@@ -809,8 +847,12 @@ def cmd_start_stop(args):
 def cmd_update(args):
     addon = find_addon(args.slug)
     image = addon["image"]
-    print(f"[ha-apps] pulling {image} ...")
-    run([DOCKER, "pull", image])
+    if addon.get("build_dir"):
+        print(f"[ha-apps] rebuilding {image} from {addon['build_dir']} ...")
+        run([DOCKER, "build", "--network", "host", "-t", image, addon["build_dir"]])
+    else:
+        print(f"[ha-apps] pulling {image} ...")
+        run([DOCKER, "pull", image])
     run([DOCKER, "rm", "-f", container_name(args.slug)], capture=True)
     run(build_run_args(addon, args.slug))
     meta = load_installed()

@@ -108,7 +108,9 @@ const PANEL_I18N = {
     "remove_keep": "Keep data",
     "remove_purge": "Delete data too",
     "remove_keep_hint": "Settings and files under /data are kept — a reinstall restores them.",
-    "remove_purge_hint": "Settings and files under /data are deleted permanently."
+    "remove_purge_hint": "Settings and files under /data are deleted permanently.",
+    "local": "local",
+    "tip_repo_local": "your own add-ons, built locally from a Dockerfile"
   },
   "de": {
     "loading_catalog": "Lade Katalog …",
@@ -214,7 +216,9 @@ const PANEL_I18N = {
     "remove_keep": "Daten behalten",
     "remove_purge": "Daten ebenfalls löschen",
     "remove_keep_hint": "Einstellungen und Dateien unter /data bleiben erhalten — eine Neuinstallation stellt sie wieder her.",
-    "remove_purge_hint": "Einstellungen und Dateien unter /data werden dauerhaft gelöscht."
+    "remove_purge_hint": "Einstellungen und Dateien unter /data werden dauerhaft gelöscht.",
+    "local": "lokal",
+    "tip_repo_local": "eigene Add-ons, lokal aus einem Dockerfile gebaut"
   }
 };
 
@@ -786,6 +790,7 @@ class HaAppsPanel extends HTMLElement {
       .badge { font-size:11px; padding:2px 8px; border-radius:10px; background:#333; }
       .badge.repo-official { background:#1d4ed8; }
       .badge.repo-community { background:#7c3aed; }
+      .badge.repo-local { background:#0d9488; }
       .badge.ok { background:#15803d; }
       .badge.warn { background:#a16207; }
       .badge.err { background:#b91c1c; }
@@ -839,6 +844,7 @@ class HaAppsPanel extends HTMLElement {
         <option value="all">${this._t("all_sources")}</option>
         <option value="official">${this._t("official")}</option>
         <option value="community">${this._t("community")}</option>
+        <option value="local">${this._t("local")}</option>
       </select>
       <select id="stateflt">
         <option value="all">${this._t("f_all")}</option>
@@ -883,4 +889,5 @@ class HaAppsPanel extends HTMLElement {
   }
 }
 
-customElements.define("ha-apps-panel", HaAppsPanel);
+if (!customElements.get("ha-apps-panel"))
+  customElements.define("ha-apps-panel", HaAppsPanel);

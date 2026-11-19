@@ -114,6 +114,8 @@
     "remove_keep": "Keep data",
     "remove_purge": "Delete data too",
     "remove_keep_hint": "Settings and files under /data are kept — a reinstall restores them.",
-    "remove_purge_hint": "Settings and files under /data are deleted permanently."
+    "remove_purge_hint": "Settings and files under /data are deleted permanently.",
+    "local": "local",
+    "tip_repo_local": "your own add-ons, built locally from a Dockerfile"
   }
 }
