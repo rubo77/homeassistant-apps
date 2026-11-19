@@ -70,7 +70,7 @@ const PANEL_I18N = {
     "update_action": "Update",
     "logs_title": "Logs — {slug}",
     "no_logs": "(no logs)",
-    "disk_line": "Disk: {free} MB free / {total} MB",
+    "disk_line": "Disk: {free} MB free",
     "disk_low_title": "Below {min} MB free — installations are blocked",
     "count_line": "{shown} of {total} add-ons",
     "update_badge": "update available",
@@ -88,9 +88,16 @@ const PANEL_I18N = {
     "port_btn": "Port {port}",
     "busy": "…",
     "count_installed": "({installed} installed)",
+    "filter_btn": "Filter",
     "f_all": "all",
-    "f_installable": "installable",
     "f_installed": "installed",
+    "f_installable": "installable",
+    "f_not_installable": "not installable",
+    "f_running": "running",
+    "f_stopped": "stopped",
+    "f_supervisor": "needs supervisor",
+    "f_special": "tested",
+    "f_update": "update available",
     "tip_repo_official": "from the official home-assistant/addons catalog",
     "tip_repo_community": "from the community hassio-addons/repository catalog",
     "tip_state": "container status: {state}",
@@ -178,7 +185,7 @@ const PANEL_I18N = {
     "update_action": "Update",
     "logs_title": "Logs — {slug}",
     "no_logs": "(keine Logs)",
-    "disk_line": "Disk: {free} MB frei / {total} MB",
+    "disk_line": "Disk: {free} MB frei",
     "disk_low_title": "Unter {min} MB frei — Installationen werden blockiert",
     "count_line": "{shown} von {total} Add-ons",
     "update_badge": "update verfügbar",
@@ -196,9 +203,16 @@ const PANEL_I18N = {
     "port_btn": "Port {port}",
     "busy": "…",
     "count_installed": "({installed} installiert)",
+    "filter_btn": "Filter",
     "f_all": "alle",
-    "f_installable": "installierbar",
     "f_installed": "installiert",
+    "f_installable": "installierbar",
+    "f_not_installable": "nicht installierbar",
+    "f_running": "läuft",
+    "f_stopped": "gestoppt",
+    "f_supervisor": "braucht supervisor",
+    "f_special": "getestet",
+    "f_update": "update verfügbar",
     "tip_repo_official": "aus dem offiziellen home-assistant/addons-Katalog",
     "tip_repo_community": "aus dem Community-Katalog hassio-addons/repository",
     "tip_state": "Container-Status: {state}",
@@ -223,6 +237,17 @@ const PANEL_I18N = {
 };
 
 
+const TAG_FILTERS = {
+  installed:        (a) => a.installed,
+  installable:      (a) => a.supported,
+  not_installable:  (a) => !a.supported,
+  running:          (a) => a.installed && a.state === "running",
+  stopped:          (a) => a.installed && a.state !== "running",
+  supervisor:       (a) => !!(a.needs_supervisor && a.needs_supervisor.length),
+  special:          (a) => !!a.special,
+  update:           (a) => !!a.update_available,
+};
+
 class HaAppsPanel extends HTMLElement {
   constructor() {
     super();
@@ -230,7 +255,7 @@ class HaAppsPanel extends HTMLElement {
     this._addons = [];
     this._filter = "";
     this._repo = "all";
-    this._stateFilter = "all";
+    this._tags = new Set();
     this._busy = new Set();
   }
 
@@ -413,7 +438,7 @@ class HaAppsPanel extends HTMLElement {
   async _openDetail(slug) {
     const detail = this.shadowRoot.querySelector("#detail");
     detail.style.display = "block";
-    this.shadowRoot.querySelector("#browser").style.display = this._t("none");
+    this.shadowRoot.querySelector("#browser").style.display = "none";
     detail.innerHTML = "<p>" + this._t("loading_details") + "</p>";
     try {
       const repo = this._addons.find((x) => x.slug === slug)?.repo || "";
@@ -436,7 +461,7 @@ class HaAppsPanel extends HTMLElement {
   }
 
   _showList() {
-    this.shadowRoot.querySelector("#detail").style.display = this._t("none");
+    this.shadowRoot.querySelector("#detail").style.display = "none";
     this.shadowRoot.querySelector("#browser").style.display = "block";
   }
 
@@ -594,12 +619,22 @@ class HaAppsPanel extends HTMLElement {
       return;
     }
     const low = s.disk_free_mb < s.min_free_mb;
-    el.textContent = this._t("disk_line", {free: s.disk_free_mb, total: s.disk_total_mb});
+    el.textContent = this._t("disk_line", {free: s.disk_free_mb});
     el.className = low ? "disk low" : "disk";
     el.title = low
       ? this._t("disk_low_title", {min: s.min_free_mb})
-      : "";
+      : this._t("tip_disk", {dir: s.disk_dir || ""});
     this._diskLow = low;
+  }
+
+  _syncFilterMenu() {
+    const menu = this.shadowRoot.querySelector("#fltmenu");
+    if (!menu) return;
+    menu.querySelectorAll('input[type=checkbox]').forEach((c) => {
+      c.checked = c.value === "all" ? this._tags.size === 0 : this._tags.has(c.value);
+    });
+    const btn = this.shadowRoot.querySelector("#fltbtn");
+    btn.textContent = this._t("filter_btn") + (this._tags.size ? ` (${this._tags.size}) ▾` : " ▾");
   }
 
   _setStatus(msg) {
@@ -613,9 +648,7 @@ class HaAppsPanel extends HTMLElement {
       .filter(
         (a) =>
           (this._repo === "all" || a.repo === this._repo) &&
-          (this._stateFilter === "all" ||
-            (this._stateFilter === "installable" && a.supported) ||
-            (this._stateFilter === "installed" && a.installed)) &&
+          [...this._tags].every((t) => TAG_FILTERS[t](a)) &&
           (!q ||
             a.name.toLowerCase().includes(q) ||
             a.slug.includes(q) ||
@@ -633,8 +666,8 @@ class HaAppsPanel extends HTMLElement {
       ` <a href="#" id="instlink">${this._t("count_installed", {installed: this._addons.filter((a) => a.installed).length})}</a>`;
     st.querySelector("#instlink").addEventListener("click", (e) => {
       e.preventDefault();
-      this._stateFilter = "installed";
-      this.shadowRoot.querySelector("#stateflt").value = "installed";
+      this._tags = new Set(["installed"]);
+      this._syncFilterMenu();
       this._renderList();
     });
     grid.innerHTML = "";
@@ -807,6 +840,9 @@ class HaAppsPanel extends HTMLElement {
       #status a { color:var(--primary-color,#03a9f4); }
       .disk { font-size:12px; opacity:.8; padding:6px 10px; border-radius:8px; background:#333; }
       .disk.low { background:#b91c1c; color:#fff; opacity:1; }
+      #fltwrap { position:relative; }
+      #fltmenu { position:absolute; top:110%; left:0; z-index:5; background:#222; border:1px solid #555; border-radius:8px; padding:8px 10px; display:flex; flex-direction:column; gap:6px; min-width:170px; box-shadow:0 4px 14px #0008; }
+      #fltmenu label { display:flex; gap:8px; align-items:center; font-size:13px; white-space:nowrap; cursor:pointer; }
       #toast { position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:#222; border:1px solid #555; padding:10px 18px; border-radius:10px; max-width:80%; white-space:pre-wrap; opacity:0; transition:opacity .2s; pointer-events:none; z-index:10; font-size:13px; }
       #toast.show { opacity:1; }
       #toast.err { border-color:#b91c1c; color:#fca5a5; }
@@ -846,11 +882,14 @@ class HaAppsPanel extends HTMLElement {
         <option value="community">${this._t("community")}</option>
         <option value="local">${this._t("local")}</option>
       </select>
-      <select id="stateflt">
-        <option value="all">${this._t("f_all")}</option>
-        <option value="installable">${this._t("f_installable")}</option>
-        <option value="installed">${this._t("f_installed")}</option>
-      </select>
+      <div id="fltwrap">
+        <button id="fltbtn">${this._t("filter_btn")} ▾</button>
+        <div id="fltmenu" hidden>
+          <label><input type="checkbox" value="all" checked> ${this._t("f_all")}</label>
+          ${Object.keys(TAG_FILTERS).map((t) =>
+            `<label><input type="checkbox" value="${t}"> ${this._t("f_" + t)}</label>`).join("")}
+        </div>
+      </div>
       <span id="disk" class="disk"></span>
       <button id="refresh">${this._t("refresh_catalog")}</button>
     </div>

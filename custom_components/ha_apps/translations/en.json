@@ -76,7 +76,7 @@
     "update_action": "Update",
     "logs_title": "Logs — {slug}",
     "no_logs": "(no logs)",
-    "disk_line": "Disk: {free} MB free / {total} MB",
+    "disk_line": "Disk: {free} MB free",
     "disk_low_title": "Below {min} MB free — installations are blocked",
     "count_line": "{shown} of {total} add-ons",
     "update_badge": "update available",
@@ -94,9 +94,6 @@
     "port_btn": "Port {port}",
     "busy": "…",
     "count_installed": "({installed} installed)",
-    "f_all": "all",
-    "f_installable": "installable",
-    "f_installed": "installed",
     "tip_repo_official": "from the official home-assistant/addons catalog",
     "tip_repo_community": "from the community hassio-addons/repository catalog",
     "tip_state": "container status: {state}",
@@ -116,6 +113,16 @@
     "remove_keep_hint": "Settings and files under /data are kept — a reinstall restores them.",
     "remove_purge_hint": "Settings and files under /data are deleted permanently.",
     "local": "local",
-    "tip_repo_local": "your own add-ons, built locally from a Dockerfile"
+    "tip_repo_local": "your own add-ons, built locally from a Dockerfile",
+    "filter_btn": "Filter",
+    "f_all": "all",
+    "f_installed": "installed",
+    "f_installable": "installable",
+    "f_not_installable": "not installable",
+    "f_running": "running",
+    "f_stopped": "stopped",
+    "f_supervisor": "needs supervisor",
+    "f_special": "tested",
+    "f_update": "update available"
   }
 }

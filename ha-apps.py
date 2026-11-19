@@ -875,6 +875,7 @@ def cmd_status(args):
         "arch": host_arch(),
         "disk_free_mb": usage.free // 1_000_000,
         "disk_total_mb": usage.total // 1_000_000,
+        "disk_dir": str(BASE_DIR),
         "min_free_mb": MIN_FREE_BYTES // 1_000_000,
         "catalog_size": len(addons),
         "installed": [s for s in installed],
