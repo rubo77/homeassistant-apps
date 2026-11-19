@@ -840,7 +840,7 @@ class HaAppsPanel extends HTMLElement {
       .disk { font-size:12px; opacity:.8; padding:6px 10px; border-radius:8px; background:#333; }
       .disk.low { background:#b91c1c; color:#fff; opacity:1; }
       #fltwrap { position:relative; }
-      #fltmenu { position:absolute; top:110%; left:0; z-index:5; background:#222; border:1px solid #555; border-radius:8px; padding:8px 10px; display:flex; flex-direction:column; gap:6px; min-width:170px; box-shadow:0 4px 14px #0008; }
+      #fltmenu { position:absolute; top:110%; left:0; z-index:5; background:var(--card-background-color,#222); border:1px solid var(--divider-color,#555); border-radius:8px; padding:8px 10px; display:flex; flex-direction:column; gap:6px; min-width:170px; box-shadow:0 4px 14px #0006; }
       #fltmenu label { display:flex; gap:8px; align-items:center; font-size:13px; white-space:nowrap; cursor:pointer; }
       #fltmenu label.excl { color:#f87171; text-decoration:line-through; }
       #fltmenu input:indeterminate { accent-color:#b91c1c; }
