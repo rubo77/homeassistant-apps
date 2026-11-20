@@ -54,6 +54,14 @@ that needs root (docker socket + `/var/lib/ha_apps`).
 
 ### 1. The custom component (via HACS or manually)
 
+**HACS** — until this repo lands in the HACS default list, add it
+as a custom repository:
+
+1. HACS → ⋮ (top right) → **Custom repositories**
+2. URL: `https://github.com/rubo77/homeassistant-apps`,
+   category **Integration** → Add
+3. Open the new "HA Apps" entry → **Download** → restart HA
+
 Manual:
 
 ```bash
