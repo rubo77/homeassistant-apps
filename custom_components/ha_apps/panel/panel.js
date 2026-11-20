@@ -605,16 +605,10 @@ class HaAppsPanel extends HTMLElement {
   }
 
   _wireDetailActions(detail, a) {
-    detail.querySelectorAll("button[data-act],button[data-port]").forEach((btn) => {
+    detail.querySelectorAll("button[data-act]").forEach((btn) => {
       btn.addEventListener("click", async () => {
-        if (btn.dataset.port) {
-          window.open(this._portUrl(btn.dataset.port), "_blank");
-          return;
-        }
         const act = btn.dataset.act;
-        if (act === "open") {
-          window.open(a.webui_url || this._portUrl(a.webui_port), "_blank");
-        } else if (act === "logs") {
+        if (act === "logs") {
           this._showLogs(a.slug);
         } else if (act === "install") {
           this._confirmInstall(a);
@@ -644,9 +638,17 @@ class HaAppsPanel extends HTMLElement {
       if (a.state === "running") {
         buttons.push(`<button data-act="stop">${this._t("stop")}</button>`);
         if (a.webui_port)
-          buttons.push(`<button class="primary" data-act="open">${this._t("open_web_ui")}</button>`);
+          buttons.push(
+            `<a class="btn primary" href="${this._webuiUrl(a)}" ` +
+            `target="_blank" rel="noopener">${this._t("open_web_ui")}</a>`
+          );
         for (const p of a.extra_ports || [])
-          buttons.push(`<button data-port="${p}">${this._t("port_btn", {port: p})}</button>`);
+          buttons.push(
+            p === a.webui_port
+              ? `<span class="portnum">${this._t("port_btn", {port: p})}</span>`
+              : `<a class="btn" href="${this._portUrl(p)}" target="_blank" rel="noopener">` +
+                `${this._t("port_btn", {port: p})}</a>`
+          );
       } else {
         buttons.push(`<button class="primary" data-act="start">${this._t("start")}</button>`);
       }
@@ -690,9 +692,19 @@ class HaAppsPanel extends HTMLElement {
     this._diskLow = low;
   }
 
+  _host() {
+    const h = location.hostname;
+    return h.includes(":") ? `[${h}]` : h;
+  }
+
   _portUrl(port) {
-    const host = (this._status && this._status.host_addr) || location.hostname;
-    return `http://${host}:${port}/`;
+    return `http://${this._host()}:${port}/`;
+  }
+
+  _webuiUrl(a) {
+    return a.webui_url
+      ? a.webui_url.replace("[HOST]", this._host())
+      : this._portUrl(a.webui_port);
   }
 
   _syncFilterMenu() {
@@ -861,10 +873,16 @@ class HaAppsPanel extends HTMLElement {
         buttons.push(`<button data-act="stop">${this._t("stop")}</button>`);
         if (a.webui_port)
           buttons.push(
-            `<button class="primary" data-act="open">${this._t("open_web_ui")}</button>`
+            `<a class="btn primary" href="${this._webuiUrl(a)}" ` +
+            `target="_blank" rel="noopener">${this._t("open_web_ui")}</a>`
           );
         for (const p of a.extra_ports || [])
-          buttons.push(`<button data-port="${p}">${this._t("port_btn", {port: p})}</button>`);
+          buttons.push(
+            p === a.webui_port
+              ? `<span class="portnum">${this._t("port_btn", {port: p})}</span>`
+              : `<a class="btn" href="${this._portUrl(p)}" target="_blank" rel="noopener">` +
+                `${this._t("port_btn", {port: p})}</a>`
+          );
       } else {
         buttons.push(`<button class="primary" data-act="start">${this._t("start")}</button>`);
       }
@@ -876,7 +894,7 @@ class HaAppsPanel extends HTMLElement {
 
     card.style.cursor = "pointer";
     card.addEventListener("click", (e) => {
-      if (e.target.closest("button")) return;
+      if (e.target.closest("button,a")) return;
       const tipEl = e.target.closest("[data-tip]");
       if (tipEl) {
         this._toast(tipEl.dataset.tip);
@@ -897,20 +915,14 @@ class HaAppsPanel extends HTMLElement {
       <div class="badges">${badges.join(" ")}</div>
       <div class="actions">${buttons.join("")}<button data-detail="${a.slug}">${this._t("details_btn")}</button></div>`;
 
-    card.querySelectorAll("button[data-act],button[data-port],button[data-detail]").forEach((btn) => {
+    card.querySelectorAll("button[data-act],button[data-detail]").forEach((btn) => {
       btn.addEventListener("click", () => {
         if (btn.dataset.detail) {
           this._openDetail(btn.dataset.detail);
           return;
         }
-        if (btn.dataset.port) {
-          window.open(this._portUrl(btn.dataset.port), "_blank");
-          return;
-        }
         const act = btn.dataset.act;
-        if (act === "open") {
-          window.open(a.webui_url || this._portUrl(a.webui_port), "_blank");
-        } else if (act === "logs") {
+        if (act === "logs") {
           this._showLogs(a.slug);
         } else if (act === "install") {
           this._confirmInstall(a);
@@ -956,14 +968,16 @@ class HaAppsPanel extends HTMLElement {
       .badge.special { background:#15803d; }
       .badge.upd { background:#0369a1; }
       .actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:auto; }
-      button { padding:7px 14px; border-radius:8px; border:1px solid #555; background:transparent; color:inherit; cursor:pointer; font-size:13px; }
-      button:hover:not(:disabled) { background:#ffffff18; }
-      button.primary { background:var(--primary-color,#03a9f4); border-color:transparent; color:#fff; }
+      button, a.btn { padding:7px 14px; border-radius:8px; border:1px solid #555; background:transparent; color:inherit; cursor:pointer; font-size:13px; }
+      a.btn { display:inline-block; text-decoration:none; }
+      button:hover:not(:disabled), a.btn:hover { background:#ffffff18; }
+      button.primary, a.btn.primary { background:var(--primary-color,#03a9f4); border-color:transparent; color:#fff; }
       button.danger { color:#f87171; border-color:#7f1d1d; }
       button:disabled { opacity:.5; cursor:default; }
       button.busy { opacity:.8; cursor:progress; }
       .spin { display:inline-block; width:11px; height:11px; margin-right:6px; vertical-align:-1px; border:2px solid currentColor; border-right-color:transparent; border-radius:50%; animation:haapps-spin .7s linear infinite; }
       @keyframes haapps-spin { to { transform:rotate(360deg); } }
+      .portnum { font-size:12px; opacity:.7; padding:7px 4px; }
       #status { font-size:13px; opacity:.7; margin-bottom:10px; }
       #status a { color:var(--primary-color,#03a9f4); }
       .disk { font-size:12px; opacity:.8; padding:6px 10px; border-radius:8px; background:#333; }
