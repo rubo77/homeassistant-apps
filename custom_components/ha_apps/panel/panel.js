@@ -486,10 +486,12 @@ class HaAppsPanel extends HTMLElement {
     this.shadowRoot.querySelector("#browser").style.display = "none";
     detail.innerHTML = "<p>" + this._t("loading_details") + "</p>";
     try {
-      const repo = this._addons.find((x) => x.slug === slug)?.repo || "";
+      const entry = this._addons.find((x) => x.slug === slug);
+      const repo = entry?.repo || "";
+      const dir = entry?.dir || slug;
       const [info, readme] = await Promise.all([
         this._api("GET", `addon/${slug}`),
-        this._api("GET", `readme/${repo}/${slug}`)
+        this._api("GET", `readme/${repo}/${dir}`)
           .catch(() => ({ markdown: "" })),
       ]);
       this._renderDetail(detail, info, readme.markdown || "");
@@ -572,7 +574,7 @@ class HaAppsPanel extends HTMLElement {
         : ""}
       ${portRows.length ? `<h3>${this._t("ports")}</h3><table class="meta"><tr><th>${this._t("container")}</th><th>${this._t("host")}</th><th>${this._t("description")}</th></tr>${portRows.join("")}</table>` : ""}
       ${optRows.length ? `<h3>${this._t("options_defaults")}</h3><table class="meta">${optRows.join("")}</table>` : ""}
-      ${markdown ? `<h3>${this._t("readme")}</h3><div class="md">${this._md(this._firstBlocks(markdown, 2), a.repo, a.slug)}</div><details class="fulldocs"><summary>${this._t("full_docs")}</summary><div class="md">${this._md(markdown, a.repo, a.slug)}</div></details>` : ""}
+      ${markdown ? `<h3>${this._t("readme")}</h3><div class="md">${this._md(this._firstBlocks(markdown, 2), a.repo, a.dir || a.slug)}</div><details class="fulldocs"><summary>${this._t("full_docs")}</summary><div class="md">${this._md(markdown, a.repo, a.dir || a.slug)}</div></details>` : ""}
       <button id="dback2">${this._t("back_to_store")}</button>`;
     detail.querySelectorAll("#dback,#dback2").forEach((b) =>
       b.addEventListener("click", () => this._showList())

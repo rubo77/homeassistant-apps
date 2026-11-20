@@ -472,10 +472,13 @@ def normalize(slug, repo_name, cfg, addon_dir, arch, have_services=None):
     icon = None
     for cand in ("icon.png", "logo.png"):
         if (addon_dir / cand).exists():
-            icon = f"/api/ha_apps/icon/{repo_name}/{slug}"
+            icon = f"/api/ha_apps/icon/{repo_name}/{addon_dir.name}"
             break
     return {
         "slug": slug,
+        # catalog dir name can differ from the config.yaml slug
+        # (node-red vs. nodered) — asset URLs resolve by directory
+        "dir": addon_dir.name,
         "repo": repo_name,
         "name": cfg.get("name", slug),
         "version": version,
