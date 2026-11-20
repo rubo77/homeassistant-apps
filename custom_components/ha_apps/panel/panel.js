@@ -467,7 +467,7 @@ class HaAppsPanel extends HTMLElement {
         this._api("GET", `readme/${repo}/${slug}`)
           .catch(() => ({ markdown: "" })),
       ]);
-      this._renderDetail(detail, info, readme.markdown || "", readme.doc || "");
+      this._renderDetail(detail, info, readme.markdown || "");
     } catch (err) {
       const msg = err?.error || err?.message || JSON.stringify(err);
       console.error("[APPS] detail load failed:", slug, err);
@@ -485,7 +485,7 @@ class HaAppsPanel extends HTMLElement {
     this.shadowRoot.querySelector("#browser").style.display = "block";
   }
 
-  _renderDetail(detail, a, markdown, docName) {
+  _renderDetail(detail, a, markdown) {
     const optRows = Object.entries(a.options || {}).map(
       ([k, v]) =>
         `<tr><td><code>${k}</code></td><td>${JSON.stringify(v)}</td></tr>`
@@ -547,7 +547,7 @@ class HaAppsPanel extends HTMLElement {
         : ""}
       ${portRows.length ? `<h3>${this._t("ports")}</h3><table class="meta"><tr><th>${this._t("container")}</th><th>${this._t("host")}</th><th>${this._t("description")}</th></tr>${portRows.join("")}</table>` : ""}
       ${optRows.length ? `<h3>${this._t("options_defaults")}</h3><table class="meta">${optRows.join("")}</table>` : ""}
-      ${markdown ? `<h3>${this._t("readme")}</h3><div class="md">${this._md(this._firstBlocks(markdown, 2), a.repo, a.slug)}</div><p><a href="/api/ha_apps/raw/${a.repo}/${a.slug}/${docName || "DOCS.md"}" target="_blank" rel="noopener">${this._t("full_docs")} ↗</a></p>` : ""}
+      ${markdown ? `<h3>${this._t("readme")}</h3><div class="md">${this._md(this._firstBlocks(markdown, 2), a.repo, a.slug)}</div><details class="fulldocs"><summary>${this._t("full_docs")}</summary><div class="md">${this._md(markdown, a.repo, a.slug)}</div></details>` : ""}
       <button id="dback2">${this._t("back_to_store")}</button>`;
     detail.querySelectorAll("#dback,#dback2").forEach((b) =>
       b.addEventListener("click", () => this._showList())
@@ -941,6 +941,9 @@ class HaAppsPanel extends HTMLElement {
       .md code { background:#1113; padding:1px 4px; border-radius:4px; font-size:12.5px; }
       .md a { color:var(--primary-color,#03a9f4); }
       .md h1,.md h2,.md h3 { margin:14px 0 6px; }
+      details.fulldocs { margin-top:10px; }
+      details.fulldocs summary { cursor:pointer; color:var(--primary-color,#03a9f4); }
+      details.fulldocs .md { margin-top:8px; padding:10px; border:1px solid #333; border-radius:8px; }
       #dback, #dback2 { margin:8px 0; }
       .dlgbtns { display:flex; gap:10px; justify-content:flex-end; margin-top:14px; }
       .warnbox { background:#78350f33; border:1px solid #b45309; border-radius:8px; padding:10px 14px; font-size:13px; }
