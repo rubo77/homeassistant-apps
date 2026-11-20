@@ -82,16 +82,19 @@ STUB_TOKEN_FILE = (
 
 def _stub_token_exists() -> bool:
     try:
-        json.loads(STUB_TOKEN_FILE.read_text())
-    except (OSError, json.JSONDecodeError):
+        data = json.loads(STUB_TOKEN_FILE.read_text())
+    except (OSError, ValueError):
         return False
-    return True
+    return isinstance(data, dict) and isinstance(data.get("token"), str) and bool(data["token"])
 
 
 def _write_stub_token(token: str) -> None:
     STUB_TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
-    STUB_TOKEN_FILE.write_text(json.dumps({"token": token}))
-    STUB_TOKEN_FILE.chmod(0o600)
+    fd = os.open(
+        STUB_TOKEN_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600
+    )
+    with os.fdopen(fd, "w") as fh:
+        fh.write(json.dumps({"token": token}))
 
 
 async def _ensure_addon_token(request):
