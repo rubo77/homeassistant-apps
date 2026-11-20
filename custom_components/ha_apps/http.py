@@ -13,10 +13,20 @@ from pathlib import Path
 
 from aiohttp import web
 from homeassistant import config_entries
+from homeassistant.auth.models import TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant
 
-from .const import CLI_CMD, REPOS_DIR
+from .const import CLI_CMD, LOCAL_REPO_DIR, REPOS_DIR
+
+
+def _addon_dir(repo: str, slug: str) -> Path | None:
+    """Repo-cached add-on directory; local add-ons live outside REPOS_DIR."""
+    for base in (Path(REPOS_DIR) / repo / slug,
+                 Path(LOCAL_REPO_DIR) / slug):
+        if base.is_dir():
+            return base
+    return None
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -35,6 +45,41 @@ def _is_admin(request: web.Request) -> bool:
 def _forbidden():
     return web.json_response(
         {"error": "admin required"}, status=HTTPStatus.FORBIDDEN
+    )
+
+
+STUB_TOKEN_FILE = (
+    Path(os.environ.get("HA_APPS_DIR", "/var/lib/ha_apps"))
+    / "stub"
+    / "token.json"
+)
+
+
+async def _ensure_addon_token(request):
+    """Long-lived HA access token the supervisor stub uses when it
+    proxies /core/api calls from add-ons (homeassistant_api/auth_api).
+    Minted once for the admin performing the install."""
+    if STUB_TOKEN_FILE.exists():
+        try:
+            json.loads(STUB_TOKEN_FILE.read_text())
+            return
+        except (OSError, json.JSONDecodeError):
+            pass
+    user = request.get("hass_user")
+    if user is None:
+        return
+    hass = request.app["hass"]
+    refresh = await hass.auth.async_create_refresh_token(
+        user,
+        client_name="ha-apps add-on token",
+        token_type=TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN,
+    )
+    token = hass.auth.async_create_access_token(refresh)
+    STUB_TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+    STUB_TOKEN_FILE.write_text(json.dumps({"token": token}))
+    STUB_TOKEN_FILE.chmod(0o600)
+    _LOGGER.info(
+        "[HA_APPS] minted HA API token for add-ons (user %s)", user.name
     )
 
 
@@ -122,6 +167,8 @@ class HaAppsActionView(HomeAssistantView):
         cli_args = [action, slug]
         if action == "remove" and body.get("purge"):
             cli_args.append("--purge")
+        if action in ("install", "update"):
+            await _ensure_addon_token(request)
         rc, out, err = await _run_cli(
             request.app["hass"], ACTION_TIMEOUT, *cli_args
         )
@@ -227,7 +274,9 @@ class HaAppsIconView(HomeAssistantView):
     async def get(self, request: web.Request, repo: str, slug: str) -> web.Response:
         if "/" in slug or ".." in slug or "/" in repo or ".." in repo:
             return web.Response(status=HTTPStatus.BAD_REQUEST)
-        base = Path(REPOS_DIR) / repo / slug
+        base = _addon_dir(repo, slug)
+        if base is None:
+            return web.Response(status=HTTPStatus.NOT_FOUND)
         icon = base / "icon.png"
         if not icon.exists():
             icon = base / "logo.png"
@@ -246,12 +295,16 @@ class HaAppsReadmeView(HomeAssistantView):
     async def get(self, request: web.Request, repo: str, slug: str) -> web.Response:
         if "/" in slug or ".." in slug or "/" in repo or ".." in repo:
             return web.Response(status=HTTPStatus.BAD_REQUEST)
-        base = Path(REPOS_DIR) / repo / slug
-        for name in ("README.md", "DOCS.md", "readme.md"):
+        base = _addon_dir(repo, slug)
+        if base is None:
+            return web.json_response({"markdown": ""})
+        for name in ("DOCS.md", "README.md", "readme.md"):
             doc = base / name
             if doc.exists():
-                return web.json_response(
-                    {"markdown": doc.read_text(errors="replace")})
+                return web.json_response({
+                    "markdown": doc.read_text(errors="replace"),
+                    "doc": name,
+                })
         return web.json_response({"markdown": ""})
 
 
@@ -265,12 +318,20 @@ class HaAppsRawView(HomeAssistantView):
     async def get(
         self, request: web.Request, repo: str, slug: str, path: str
     ) -> web.Response:
-        base = (Path(REPOS_DIR) / repo / slug).resolve()
+        found = _addon_dir(repo, slug)
+        if found is None:
+            return web.Response(status=HTTPStatus.NOT_FOUND)
+        base = found.resolve()
         target = (base / path).resolve()
         if not str(target).startswith(str(base) + "/"):
             return web.Response(status=HTTPStatus.BAD_REQUEST)
         if not target.is_file():
             return web.Response(status=HTTPStatus.NOT_FOUND)
+        if target.suffix == ".md":
+            return web.Response(
+                text=target.read_text(errors="replace"),
+                content_type="text/plain",
+            )
         return web.FileResponse(target)
 
 
