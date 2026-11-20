@@ -1,10 +1,10 @@
 # homeassistant-apps
 
-A Supervisor-free **app store for Home Assistant Core** on
-Debian/Ubuntu/Raspbian. It browses the official `home-assistant/addons`
-and `hassio-addons/repository` catalogs, and installs add-ons as plain
-Docker containers — no Home Assistant OS, no Supervisor, no `apt upgrade`
-of the host.
+An **app store for Home Assistant Core** on Debian/Ubuntu/Raspbian.
+
+**No Home Assistant OS required.** It browses the official
+`home-assistant/addons` and `hassio-addons/repository` catalogs and
+installs add-ons on your existing Home Assistant Core instance.
 
 Made for HA Core installs (`hass` in a venv, systemd unit) where the
 built-in "Apps" section is missing.
@@ -12,8 +12,12 @@ built-in "Apps" section is missing.
 ## What it looks like
 
 - Sidebar panel "Apps" inside Home Assistant: catalog, search,
-  per-app detail page with README, ports, options and download size.
+  per-app detail page with inline docs, ports, options and download
+  size.
+- Tag, install-status and installable-only filters; the filter state
+  and active tags persist across panel reloads.
 - Install/Update/Start/Stop/Remove/Logs — all from the panel.
+  Remove offers to keep or purge the app's `/data`.
 - Install dialog shows a compatibility check (Supervisor API usage,
   CPU/arch requirements, free disk) before anything is pulled.
 - Apps that call Supervisor APIs get a small **Supervisor stub**
@@ -48,7 +52,7 @@ that needs root (docker socket + `/var/lib/ha_apps`).
 
 ## Install
 
-### 1. The custom component (via HACS — planned, or manually)
+### 1. The custom component (via HACS or manually)
 
 Manual:
 
@@ -72,6 +76,24 @@ bash install.sh
 `/usr/local/lib/ha-apps`, the `ha-apps` wrapper to `/usr/local/bin`,
 creates `/var/lib/ha_apps/*` and warms the add-on catalog.
 
+### 3. The CLI
+
+The same `ha-apps` command backs the panel and works standalone on
+the HA host:
+
+```bash
+ha-apps update-catalog   # refresh the add-on catalogs
+ha-apps list             # all add-ons with install state
+ha-apps info <slug>      # details for one add-on
+ha-apps install <slug>   # pull/build + create container
+ha-apps start|stop <slug>
+ha-apps update <slug>    # reinstall newer image
+ha-apps remove <slug> [--purge]   # --purge deletes /data
+ha-apps logs <slug>
+ha-apps status           # installed.json + container states
+ha-apps doctor           # health checks (docker, catalogs, stub)
+```
+
 ### Configuration
 
 All paths are environment-configurable:
@@ -81,9 +103,22 @@ All paths are environment-configurable:
 | `HA_APPS_LIB` | `/usr/local/lib/ha-apps` | `install.sh`, CLI lookup |
 | `HA_APPS_BIN` | `/usr/local/bin` | `install.sh`, component |
 | `HA_APPS_DIR` | `/var/lib/ha_apps` | CLI + component |
+| `HA_APPS_LOCAL_REPO` | `$HA_APPS_DIR/local` | CLI + panel ("local" source) |
 
 Set them in the systemd unit (`Environment=HA_APPS_DIR=...`) when
 non-default locations are used.
+
+### Local add-on repositories
+
+Besides the official and community catalogs, ha-apps scans
+`HA_APPS_LOCAL_REPO` for add-ons built locally (e.g. from a
+`Dockerfile`). Apps there appear under the **local** source badge.
+Each local repo is a directory of add-on folders containing
+`config.yaml`; a `repository.yaml` at the root makes it a proper
+repository.
+
+Example: [rubo77/tidal-addon](https://github.com/rubo77/tidal-addon)
+ships a Mopidy/Tidal add-on this way.
 
 ## Supported vs. best-effort
 
@@ -103,6 +138,7 @@ non-default locations are used.
 ```
 /var/lib/ha_apps/
 ├── repos/        git clones of the add-on catalogs
+├── local/        local add-on repo (HA_APPS_LOCAL_REPO)
 ├── data/<slug>/  per-app data (mounted at /data in the container)
 ├── cache/        image download-size cache
 └── share|ssl|addons|media|backup/  bind-mounts for add-ons expecting them
@@ -111,7 +147,7 @@ non-default locations are used.
 ## Development
 
 - `custom_components/ha_apps/` — the HA integration (panel + HTTP API)
-- `ha-apps.py` — the backend CLI (~900 lines, stdlib + PyYAML only)
+- `ha-apps.py` — the backend CLI (stdlib + PyYAML only)
 - `supervisor_stub.py` — the supervisor API stub container script
 - `install.sh` — backend installer
 
