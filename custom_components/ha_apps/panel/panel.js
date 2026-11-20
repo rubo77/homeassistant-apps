@@ -30,9 +30,10 @@ const PANEL_I18N = {
     "web_port": "Web port",
     "auto_setup": "⚙️ Auto-Setup: {notes}",
     "todo_after": "📋 Still to do after installation:",
-    "pi_discovery": "This add-on normally announces itself to Home Assistant via Supervisor discovery — that is absent here. Add the matching integration manually (Settings → Devices & services → + Add integration), using this machine's IP and the mapped port.",
+    "pi_discovery": "This app would normally register itself with Home Assistant automatically — that does not work here. Add it yourself afterwards: Settings → Devices & services → + Add integration, using this machine's IP address and the shown port.",
     "pi_no_ingress": "The web UI does not run embedded (no ingress) — open it directly on the mapped port in your browser.",
-    "pi_no_ingress_port": "The web UI does not run embedded (no ingress) — open it in your browser on this machine, port {port}.",
+    "pi_no_ingress_port": "This app has its own web page — it does not appear inside Home Assistant. Open it in your browser on this machine, port {port} (or click the Web UI button).",
+    "pi_ingress_autopublish": "This app has its own web page — it does not appear inside Home Assistant. The store makes it reachable automatically during install — afterwards just click the Web UI button.",
     "loading_details": "Loading details …",
     "details_failed": "Details could not be loaded: {msg}",
     "back": "Back",
@@ -150,9 +151,10 @@ const PANEL_I18N = {
     "web_port": "Web-Port",
     "auto_setup": "⚙️ Auto-Setup: {notes}",
     "todo_after": "📋 Nach der Installation noch zu tun:",
-    "pi_discovery": "Dieses Add-on meldet sich normalerweise per Supervisor-Discovery bei Home Assistant an — das fehlt hier. Die passende Integration manuell hinzufügen (Einstellungen → Geräte & Dienste → + Integration hinzufügen), mit der IP dieses Rechners und dem gemappten Port.",
+    "pi_discovery": "Diese App würde sich normalerweise automatisch bei Home Assistant anmelden — das geht hier nicht. Danach selbst einrichten: Einstellungen → Geräte & Dienste → + Integration hinzufügen, mit der IP dieses Rechners und dem angezeigten Port.",
     "pi_no_ingress": "Die Weboberfläche läuft nicht eingebettet (kein Ingress) — im Browser direkt über den gemappten Port öffnen.",
-    "pi_no_ingress_port": "Die Weboberfläche läuft nicht eingebettet (kein Ingress) — im Browser auf diesem Rechner über Port {port} öffnen.",
+    "pi_no_ingress_port": "Diese App hat eine eigene Webseite — sie erscheint nicht direkt in Home Assistant. Im Browser auf diesem Rechner über Port {port} öffnen (oder auf den Web-UI-Button klicken).",
+    "pi_ingress_autopublish": "Diese App hat eine eigene Webseite — sie erscheint nicht direkt in Home Assistant. Der Store macht sie beim Installieren automatisch erreichbar — danach einfach auf den Web-UI-Button klicken.",
     "loading_details": "Lade Details …",
     "details_failed": "Details konnten nicht geladen werden: {msg}",
     "back": "Zurück",
@@ -267,6 +269,8 @@ class HaAppsPanel extends HTMLElement {
     this._repo = "all";
     this._tags = this._loadTags();
     this._busy = new Set();
+    this._detail = null;
+    this._verified = false;
   }
 
   set hass(hass) {
@@ -343,6 +347,7 @@ class HaAppsPanel extends HTMLElement {
       this._renderDisk();
       const addons = await this._api("GET", "addons");
       this._addons = addons;
+      this._verified = true;
       this._saveAddons(addons);
       if (this._addons.length === 0) {
         this._setStatus(
@@ -437,6 +442,7 @@ class HaAppsPanel extends HTMLElement {
   async _action(slug, action, purge = false) {
     this._busy.add(slug);
     this._renderList();
+    this._syncDetailActions();
     try {
       const res = await this._api("POST", `addon/${slug}/action`, {
         action,
@@ -448,7 +454,21 @@ class HaAppsPanel extends HTMLElement {
     } finally {
       this._busy.delete(slug);
       await this._load();
+      if (this._detail?.slug === slug) {
+        const fresh = await this._api("GET", `addon/${slug}`).catch(() => null);
+        if (fresh)
+          this._renderDetail(this._detail.el, fresh, this._detail.markdown);
+      }
     }
+  }
+
+  _syncDetailActions() {
+    const d = this._detail;
+    if (!d?.a) return;
+    const actions = d.el.querySelector(".dactions");
+    if (!actions) return;
+    actions.innerHTML = this._actionButtons(d.a);
+    this._wireDetailActions(d.el, d.a);
   }
 
   _md(src, repo, slug) {
@@ -497,7 +517,7 @@ class HaAppsPanel extends HTMLElement {
       this._renderDetail(detail, info, readme.markdown || "");
     } catch (err) {
       const msg = err?.error || err?.message || JSON.stringify(err);
-      console.error("[APPS] detail load failed:", slug, err);
+      console.error("[HA_APPS] detail load failed:", slug, err);
       detail.innerHTML =
         `<p>${this._t("details_failed", {msg})}</p>` +
         `<button id="dback">${this._t("back")}</button>`;
@@ -508,11 +528,13 @@ class HaAppsPanel extends HTMLElement {
   }
 
   _showList() {
+    this._detail = null;
     this.shadowRoot.querySelector("#detail").style.display = "none";
     this.shadowRoot.querySelector("#browser").style.display = "block";
   }
 
   _renderDetail(detail, a, markdown) {
+    this._detail = { slug: a.slug, el: detail, a, markdown };
     const optRows = Object.entries(a.options || {}).map(
       ([k, v]) =>
         `<tr><td><code>${k}</code></td><td>${JSON.stringify(v)}</td></tr>`
@@ -579,6 +601,10 @@ class HaAppsPanel extends HTMLElement {
     detail.querySelectorAll("#dback,#dback2").forEach((b) =>
       b.addEventListener("click", () => this._showList())
     );
+    this._wireDetailActions(detail, a);
+  }
+
+  _wireDetailActions(detail, a) {
     detail.querySelectorAll("button[data-act],button[data-port]").forEach((btn) => {
       btn.addEventListener("click", async () => {
         if (btn.dataset.port) {
@@ -597,17 +623,13 @@ class HaAppsPanel extends HTMLElement {
         } else {
           await this._action(a.slug, act);
         }
-        if (act !== "open" && act !== "logs" && act !== "install") {
-          const addons = await this._api("GET", "addons");
-          this._addons = addons;
-          const fresh = addons.find((x) => x.slug === a.slug);
-          if (fresh) this._renderDetail(detail, Object.assign({}, a, fresh));
-        }
       });
     });
   }
 
   _actionButtons(a) {
+    if (this._busy.has(a.slug))
+      return `<button disabled class="busy"><span class="spin"></span>${this._t("busy")}</button>`;
     const buttons = [];
     if (!a.installed && !a.supported) {
       return `<span class="badge err">${a.unsupported_reason || this._t("not_supported")}</span>`;
@@ -818,8 +840,10 @@ class HaAppsPanel extends HTMLElement {
     }
 
     const buttons = [];
-    if (busy) {
-      buttons.push("<button disabled>…</button>");
+    if (!this._verified) {
+      /* cached card — install state not checked yet, hide all actions */
+    } else if (busy) {
+      buttons.push(`<button disabled class="busy"><span class="spin"></span>${this._t("busy")}</button>`);
     } else if (!a.installed && !a.supported) {
       /* no actions */
     } else if (!a.installed) {
@@ -937,6 +961,9 @@ class HaAppsPanel extends HTMLElement {
       button.primary { background:var(--primary-color,#03a9f4); border-color:transparent; color:#fff; }
       button.danger { color:#f87171; border-color:#7f1d1d; }
       button:disabled { opacity:.5; cursor:default; }
+      button.busy { opacity:.8; cursor:progress; }
+      .spin { display:inline-block; width:11px; height:11px; margin-right:6px; vertical-align:-1px; border:2px solid currentColor; border-right-color:transparent; border-radius:50%; animation:haapps-spin .7s linear infinite; }
+      @keyframes haapps-spin { to { transform:rotate(360deg); } }
       #status { font-size:13px; opacity:.7; margin-bottom:10px; }
       #status a { color:var(--primary-color,#03a9f4); }
       .disk { font-size:12px; opacity:.8; padding:6px 10px; border-radius:8px; background:#333; }
