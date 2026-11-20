@@ -8,6 +8,7 @@
 # Usage: see dev/ha-apps (bash wrapper) or `ha-apps --help`.
 
 import argparse
+import glob
 import json
 import os
 import platform
@@ -63,6 +64,7 @@ GIT = _find_binary("git")
 
 NETWORK = "ha_apps_net"
 STUB_CONTAINER = "ha_apps_supervisor-stub"
+STUB_DATA = BASE_DIR / "stub"
 STUB_IMAGE = "python:3-alpine"
 STUB_SCRIPT = Path(__file__).parent / "supervisor_stub.py"
 
@@ -77,12 +79,29 @@ def ensure_network():
 
 
 def ensure_stub():
-    """(Re)create the supervisor API stub container if it is missing."""
+    """(Re)create the supervisor API stub container if it is missing
+    or lacks the token mount."""
+    STUB_DATA.mkdir(parents=True, exist_ok=True)
+    # fill in the URL the stub uses to reach the real HA API — the LAN
+    # egress IP works from bridge-network containers and tracks DHCP
+    token_file = STUB_DATA / "token.json"
+    if token_file.exists():
+        try:
+            data = json.loads(token_file.read_text())
+            data["ha_url"] = f"http://{host_addr()}:8123"
+            token_file.write_text(json.dumps(data))
+        except (OSError, json.JSONDecodeError):
+            pass
     p = run(
-        [DOCKER, "inspect", "-f", "{{.State.Running}}", STUB_CONTAINER],
+        [DOCKER, "inspect", "-f",
+         "{{.State.Running}} {{.Mounts}}", STUB_CONTAINER],
         capture=True, check=False,
     )
-    if p.returncode == 0 and p.stdout.strip() == "true":
+    if (
+        p.returncode == 0
+        and p.stdout.strip().startswith("true")
+        and "ha_apps_stub" in p.stdout
+    ):
         return
     run([DOCKER, "rm", "-f", STUB_CONTAINER], capture=True, check=False)
     run([DOCKER, "pull", STUB_IMAGE])
@@ -100,6 +119,8 @@ def ensure_stub():
         # per-caller option lookup: stub resolves client IP -> container
         # name -> slug -> /ha_apps_data/<slug>/options.json
         "-v", f"{BASE_DIR / 'data'}:/ha_apps_data:ro",
+        # token + ha_url for proxying /core/api to the real HA
+        "-v", f"{STUB_DATA}:/ha_apps_stub:ro",
         STUB_IMAGE, "python", "/stub.py",
     ])
 ARCH_MAP = {
@@ -196,10 +217,8 @@ def docker_states():
     return states
 
 
-def scan_catalog():
-    """Parse every */config.{yaml,json} in the cached repos into a dict."""
-    addons = {}
-    arch = host_arch()
+def _catalog_entries():
+    """Yield (slug, repo_name, cfg, addon_dir) for every repo config."""
     repo_dirs = {name: REPOS_DIR / name for name in REPOS}
     repo_dirs["local"] = LOCAL_REPO_DIR
     for repo_name, repo_dir in repo_dirs.items():
@@ -218,7 +237,33 @@ def scan_catalog():
             if not isinstance(cfg, dict) or "name" not in cfg:
                 continue
             slug = cfg.get("slug") or cfg_path.parent.name
-            addons[slug] = normalize(slug, repo_name, cfg, cfg_path.parent, arch)
+            yield slug, repo_name, cfg, cfg_path.parent
+
+
+def installed_service_names():
+    """Service names with at least one installed provider add-on
+    (services: ["mqtt:provide"] declares the provider side)."""
+    provided = {}
+    for slug, _repo, cfg, _dir in _catalog_entries():
+        for svc in cfg.get("services") or []:
+            name, _, mode = str(svc).partition(":")
+            if mode == "provide":
+                provided.setdefault(name, set()).add(slug)
+    installed = set(load_installed())
+    return {
+        name for name, slugs in provided.items() if slugs & installed
+    }
+
+
+def scan_catalog():
+    """Parse every */config.{yaml,json} in the cached repos into a dict."""
+    addons = {}
+    arch = host_arch()
+    have_services = installed_service_names()
+    for slug, repo_name, cfg, addon_dir in _catalog_entries():
+        addons[slug] = normalize(
+            slug, repo_name, cfg, addon_dir, arch, have_services
+        )
     return addons
 
 
@@ -328,7 +373,7 @@ def post_install_notes(slug, cfg, needs_sup):
     return notes
 
 
-def normalize(slug, repo_name, cfg, addon_dir, arch):
+def normalize(slug, repo_name, cfg, addon_dir, arch, have_services=None):
     """Reduce a Supervisor config.yaml to what the store/installer needs."""
     supported = True
     reason = None
@@ -365,6 +410,13 @@ def normalize(slug, repo_name, cfg, addon_dir, arch):
         have = _ver_tuple(os.environ.get("HA_VERSION", ""))
         if req and have and have < req:
             supported, reason = False, f"needs HA >= {cfg['homeassistant']}"
+    if supported and have_services is not None:
+        # svc:need hard-requires a provider add-on to be installed
+        for svc in cfg.get("services") or []:
+            name, _, mode = str(svc).partition(":")
+            if mode == "need" and name not in have_services:
+                supported, reason = False, f"requires service {name}"
+                break
     build_dir = None
     if cfg.get("build") or (addon_dir / "Dockerfile").exists():
         # built locally from the repo's Dockerfile, not pulled
@@ -506,6 +558,45 @@ def build_run_args(addon, slug, extra_ports=()):
             args += ["-v", f"{HOST_PASSTHROUGH[key]}:{HOST_PASSTHROUGH[key]}:{mode}"]
     for dev in cfg.get("devices") or []:
         args += ["--device", dev]
+    # capability grants the Supervisor would wire up — mapped only when
+    # the host actually has the backing socket/device so the container
+    # never sees a dangling bind-mount dir
+    for key, path in {
+        "docker_api": "/var/run/docker.sock",
+        "host_dbus": "/run/dbus",
+        "udev": "/run/udev",
+        "bluetooth": "/run/dbus",
+    }.items():
+        if cfg.get(key) and os.path.exists(path):
+            args += ["-v", f"{path}:{path}"]
+    if cfg.get("host_pid"):
+        args += ["--pid", "host"]
+    if cfg.get("host_uts"):
+        args += ["--uts", "host"]
+    if cfg.get("host_ipc"):
+        args += ["--ipc", "host"]
+    if cfg.get("privileged") or cfg.get("full_access"):
+        args += ["--privileged"]
+    if cfg.get("kernel_modules"):
+        args += ["--cap-add", "SYS_MODULE"]
+    if cfg.get("usb") and os.path.isdir("/dev/bus/usb"):
+        args += ["-v", "/dev/bus/usb:/dev/bus/usb"]
+    if cfg.get("uart") and os.path.isdir("/dev/serial"):
+        args += ["-v", "/dev/serial:/dev/serial"]
+    if cfg.get("devicetree") and os.path.isdir("/proc/device-tree"):
+        args += ["-v", "/proc/device-tree:/proc/device-tree:ro"]
+    if cfg.get("gpio"):
+        for chip in sorted(glob.glob("/dev/gpiochip*")):
+            args += ["--device", chip]
+    if cfg.get("video"):
+        for dri in sorted(
+            glob.glob("/dev/dri/card*") + glob.glob("/dev/dri/renderD*")
+        ):
+            args += ["--device", dri]
+    if cfg.get("audio") and os.path.isdir("/dev/snd"):
+        args += ["--device", "/dev/snd"]
+    if any(str(d).startswith("/dev/net/") for d in cfg.get("devices") or []):
+        args += ["--cap-add", "NET_ADMIN"]
     for key, value in (cfg.get("environment") or {}).items():
         args += ["-e", f"{key}={value}"]
     options = cfg.get("options")
@@ -720,7 +811,10 @@ def find_addon(slug):
                 except Exception as err:
                     sys.exit(f"ha-apps: parse error in {cfg_path}: {err}")
                 real_slug = cfg.get("slug") or slug
-                return normalize(real_slug, repo_name, cfg, addon_dir, arch)
+                return normalize(
+                    real_slug, repo_name, cfg, addon_dir, arch,
+                    installed_service_names(),
+                )
     # slugs may differ from directory names — fall back to a full scan
     addon = scan_catalog().get(slug)
     if not addon:
@@ -892,6 +986,10 @@ def missing_hardware(cfg):
         and not (_has("/dev/ttyUSB*") or _has("/dev/ttyACM*"))
     ):
         missing.append("serial adapter")
+    if cfg.get("audio") and not _has("/dev/snd/*"):
+        missing.append("audio")
+    if cfg.get("bluetooth") and not _has("/sys/class/bluetooth/hci*"):
+        missing.append("bluetooth")
     return missing
 
 

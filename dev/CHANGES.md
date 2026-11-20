@@ -27,3 +27,10 @@
   and setuptools<81 (pkg_resources removed in v81). Verified on
   nebelhaufen: container up, Iris 200 on :6680, MPD OK on :6600,
   /dev/snd mapped, HDA Intel ALC262 present.
+- 20.11.2026 installability gates: audio (no /dev/snd), bluetooth (no
+  hci*), services `x:need` without an installed provider add-on
+  (phpmyadmin -> mariadb); capability grants now actually wired into
+  docker run args — docker.sock/dbus/udev mounts, --pid/--uts/--ipc
+  host, --privileged (privileged/full_access), SYS_MODULE cap,
+  usb/serial/devicetree/gpio/dri/snd device maps, NET_ADMIN for
+  /dev/net/* add-ons

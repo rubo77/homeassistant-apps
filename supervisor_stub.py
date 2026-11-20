@@ -13,10 +13,13 @@
 
 import json
 import socket
+import urllib.error
+import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 DATA_DIR = Path("/ha_apps_data")
+TOKEN_FILE = Path("/ha_apps_stub/token.json")
 
 INFO = {
     "supervisor": "stub",
@@ -36,6 +39,28 @@ INFO = {
     "version_latest": "stub",
     "features": [],
 }
+
+
+def _default_ha_url():
+    # the docker bridge gateway is the host; HA binds 0.0.0.0:8123
+    try:
+        for line in Path("/proc/net/route").read_text().splitlines()[1:]:
+            f = line.split()
+            if f[1] == "00000000" and int(f[3], 16) & 1:
+                gw = socket.inet_ntoa(bytes.fromhex(f[2])[::-1])
+                return f"http://{gw}:8123"
+    except (OSError, IndexError):
+        pass
+    return "http://172.17.0.1:8123"
+
+
+def _ha_conn():
+    """(token, base_url) for proxying core API calls, or (None, None)."""
+    try:
+        d = json.loads(TOKEN_FILE.read_text())
+        return d["token"], d.get("ha_url") or _default_ha_url()
+    except (OSError, json.JSONDecodeError, KeyError):
+        return None, None
 
 
 def caller_slug(ip):
@@ -108,11 +133,66 @@ class Stub(BaseHTTPRequestHandler):
             return INFO
         return {}
 
+    def _proxy(self):
+        """Forward core-API calls to the real HA when a token exists.
+        The Supervisor maps /core/api/* -> HA /api/*; add-ons with
+        homeassistant_api call exactly that path. /auth goes through
+        too (auth_api consumers)."""
+        token, base = _ha_conn()
+        if not token:
+            return False
+        path = self.path
+        if path.startswith("/core/api"):
+            path = "/api" + path[len("/core/api"):]
+        elif not path.startswith(("/api", "/auth")):
+            return False
+        body = None
+        if self.command in ("POST", "PUT", "PATCH", "DELETE"):
+            body = self.rfile.read(
+                int(self.headers.get("Content-Length") or 0))
+        req = urllib.request.Request(
+            base + path, data=body, method=self.command,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": self.headers.get("Content-Type")
+                or "application/json",
+            })
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                data = resp.read()
+                code = resp.status
+                ctype = resp.headers.get("Content-Type", "application/json")
+        except urllib.error.HTTPError as err:
+            data, code, ctype = err.read(), err.code, "application/json"
+        except OSError as err:
+            self._reply({"error": f"ha api unreachable: {err}"}, 502)
+            return True
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+        return True
+
     def do_GET(self):
-        self._reply(self._route())
+        if not self._proxy():
+            self._reply(self._route())
 
     def do_POST(self):
-        self._reply(self._route())
+        if not self._proxy():
+            self._reply(self._route())
+
+    def do_PUT(self):
+        if not self._proxy():
+            self._reply({})
+
+    def do_PATCH(self):
+        if not self._proxy():
+            self._reply({})
+
+    def do_DELETE(self):
+        if not self._proxy():
+            self._reply({})
 
     def log_message(self, fmt, *args):
         print(f"[stub] {self.client_address[0]} {fmt % args}", flush=True)
