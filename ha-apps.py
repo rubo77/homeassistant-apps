@@ -138,7 +138,7 @@ ARCH_MAP = {
 # names are normalized through this table.
 VOLUME_MAP = {
     "config": lambda slug: (HA_CONFIG_DIR, "/config"),
-    "homeassistant_config": lambda slug: (HA_CONFIG_DIR, "/config"),
+    "homeassistant_config": lambda slug: (HA_CONFIG_DIR, "/homeassistant"),
     "share": lambda slug: (str(BASE_DIR / "share"), "/share"),
     "ssl": lambda slug: (str(BASE_DIR / "ssl"), "/ssl"),
     "addons": lambda slug: (str(BASE_DIR / "addons"), "/addons"),
@@ -304,12 +304,6 @@ SPECIAL_INSTALLERS = {
     },
 }
 
-# ingress-only add-ons that declare neither ports nor webui/ingress_port:
-# the image's default listen port, published so the UI stays reachable
-WEBUI_PORT_DEFAULTS = {
-    "sqlite-web": 8080,
-}
-
 # extra payload some add-ons download at runtime (models, voices)
 SIZE_NOTES = {
     "piper": "plus ~20–60 MB per voice (downloaded on first TTS call)",
@@ -383,9 +377,10 @@ def post_install_notes(slug, cfg, needs_sup, webui_port=None):
         else:
             notes.append(
                 {
-                    "key": "pi_no_ingress",
-                    "text": "The web UI does not run embedded (no ingress) — "
-                    "open it directly on the mapped port in your browser.",
+                    "key": "pi_ingress_autopublish",
+                    "text": "The web UI does not run embedded (no ingress). "
+                    "The store publishes the app's own port at install — "
+                    "open it afterwards via the Web UI button.",
                 }
             )
     return notes
@@ -466,8 +461,6 @@ def normalize(slug, repo_name, cfg, addon_dir, arch, have_services=None):
             webui_port = int(host_port)
         else:
             webui_port = int(container_port) if container_port.isdigit() else None
-    if webui_port is None:
-        webui_port = WEBUI_PORT_DEFAULTS.get(slug)
     needs_sup = [k for k in SUPERVISOR_KEYS if cfg.get(k)]
     icon = None
     for cand in ("icon.png", "logo.png"):
@@ -507,6 +500,58 @@ def normalize(slug, repo_name, cfg, addon_dir, arch, have_services=None):
 
 def container_name(slug):
     return f"{CONTAINER_PREFIX}{slug}"
+
+
+def detect_listen_port(cname, timeout=20):
+    """TCP port the container actually LISTENs on, read from the host via
+    /proc/<container-pid>/net/tcp — works for images that declare no
+    EXPOSE at all (common for hassio base images). Prefers port 80,
+    else the lowest listening port."""
+    deadline = time.time() + timeout
+    prev = set()
+    while time.time() < deadline:
+        insp = run(
+            [DOCKER, "inspect", "-f", "{{.State.Pid}}", cname],
+            capture=True, check=False,
+        )
+        pid = (insp.stdout or "").strip()
+        listeners = set()
+        if pid and pid != "0":
+            for table in (f"/proc/{pid}/net/tcp", f"/proc/{pid}/net/tcp6"):
+                try:
+                    lines = open(table).read().splitlines()[1:]
+                except OSError:
+                    continue
+                for line in lines:
+                    cols = line.split()
+                    if cols[3] == "0A":  # LISTEN
+                        listeners.add(int(cols[1].rsplit(":", 1)[1], 16))
+        # only ports that persist across two polls count — crash-looping
+        # init systems briefly bind throwaway sockets
+        stable = sorted(listeners & prev)
+        if stable:
+            return 80 if 80 in stable else stable[0]
+        prev = listeners
+        time.sleep(1)
+    return None
+
+
+def free_host_port(preferred):
+    """First free TCP host port at or above `preferred` (so a published
+    add-on UI doesn't collide with an occupied port)."""
+    import socket
+    port = preferred
+    while port < preferred + 100:
+        s = socket.socket()
+        try:
+            s.bind(("0.0.0.0", port))
+        except OSError:
+            port += 1
+            continue
+        finally:
+            s.close()
+        return port
+    return preferred
 
 
 def build_run_args(addon, slug, extra_ports=()):
@@ -783,6 +828,8 @@ def enrich(addons):
             addon["installed_version"] = meta.get("version")
             addon["webui_port"] = meta.get("webui_port")
             addon["extra_ports"] = meta.get("extra_ports", [])
+            if meta.get("post_install"):
+                addon["post_install"] = meta["post_install"]
             if meta.get("image") in sizes:
                 addon["image_size"] = sizes[meta["image"]]
             update_avail = (
@@ -943,6 +990,41 @@ def cmd_install(args):
     wait_port = special.get("wait_port")
     if wait_port:
         _wait_tcp(wait_port)
+    # ingress-only add-ons (no declared webui/ingress port): the app
+    # still listens on its own port — detect it from the container's
+    # socket table, then republish. Images typically declare no EXPOSE,
+    # so this can only be learned once the app is up.
+    host_port = None
+    if (
+        addon["raw"].get("ingress")
+        and not addon.get("ingress_port")
+        and not addon.get("webui_port")
+        and not addon["host_network"]
+    ):
+        detected = detect_listen_port(cname)
+        if detected:
+            host_port = free_host_port(detected)
+            print(
+                f"[ha-apps] no ingress here — republishing web UI "
+                f"on port {host_port} (container port {detected})"
+            )
+            extra_ports.append(f"{host_port}:{detected}")
+            run([DOCKER, "rm", "-f", cname], capture=True)
+            run_args = build_run_args(addon, args.slug, extra_ports=extra_ports)
+            run(run_args)
+        else:
+            print(
+                "[ha-apps] WARNING: ingress-only add-on and no listening "
+                "port detected — web UI may be unreachable",
+                file=sys.stderr,
+            )
+    # host-side port the web UI actually answers on (may differ from the
+    # container port when `preferred` was already taken)
+    published_webui = (
+        addon.get("webui_port")
+        or addon.get("ingress_port")
+        or host_port
+    )
     meta = load_installed()
     meta[args.slug] = {
         "slug": args.slug,
@@ -950,8 +1032,13 @@ def cmd_install(args):
         "name": addon["name"],
         "version": addon["version"],
         "image": image,
-        "webui_port": addon.get("webui_port"),
+        "webui_port": published_webui,
         "webui": addon.get("webui"),
+        # notes resolved against the real port — the catalog copy only
+        # knows the generic autopublish hint
+        "post_install": post_install_notes(
+            args.slug, addon["raw"], addon["needs_supervisor"], published_webui
+        ),
         "extra_ports": [
             int(p.split(":")[-2]) if p.count(":") == 2
             else int(p.partition(":")[0])
@@ -968,9 +1055,8 @@ def machine_id():
     """Machine identifier for add-on `machine:` requirements. On plain
     Linux hosts there is no Supervisor machine concept — report a
     generic id matching the CPU arch."""
-    import glob as _glob
     model = ""
-    for f in _glob.glob("/proc/device-tree/model"):
+    for f in glob.glob("/proc/device-tree/model"):
         try:
             model = open(f).read().strip("\x00").lower()
             break
