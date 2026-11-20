@@ -37,6 +37,7 @@ const PANEL_I18N = {
     "loading_details": "Loading details …",
     "details_failed": "Details could not be loaded: {msg}",
     "back": "Back",
+    "details_btn": "Details →",
     "back_to_store": "← Back to store",
     "disabled": "disabled",
     "size": "Size",
@@ -83,7 +84,6 @@ const PANEL_I18N = {
     "verified_badge": "verified",
     "verified_title": "Tested with auto-setup — will be fully configured",
     "disk_low_btn": "Not enough free disk space",
-    "details_btn": "Details →",
     "search_placeholder": "Search add-ons …",
     "all_sources": "All sources",
     "official": "Official",
@@ -158,6 +158,7 @@ const PANEL_I18N = {
     "loading_details": "Lade Details …",
     "details_failed": "Details konnten nicht geladen werden: {msg}",
     "back": "Zurück",
+    "details_btn": "Details →",
     "back_to_store": "← Zurück zum Store",
     "disabled": "deaktiviert",
     "size": "Größe",
@@ -204,7 +205,6 @@ const PANEL_I18N = {
     "verified_badge": "getestet",
     "verified_title": "Mit Auto-Setup getestet — wird vollständig eingerichtet",
     "disk_low_btn": "Zu wenig freier Speicher",
-    "details_btn": "Details →",
     "search_placeholder": "Add-ons durchsuchen …",
     "all_sources": "Alle Quellen",
     "official": "Offiziell",
@@ -338,6 +338,8 @@ class HaAppsPanel extends HTMLElement {
     }
     this._status = this._loadStatus();
     this._renderDisk();
+    this._refreshing = true;
+    this._syncRefresh();
     try {
       const fresh = await this._api("GET", "status").catch(() => null);
       if (fresh) {
@@ -358,11 +360,23 @@ class HaAppsPanel extends HTMLElement {
       this._renderList();
     } catch (_err) {
       if (!this._addons.length) this._setStatus(this._t("catalog_failed"));
+    } finally {
+      this._refreshing = false;
+      this._syncRefresh();
     }
+  }
+
+  _syncRefresh() {
+    const b = this.shadowRoot.querySelector("#refresh");
+    if (!b) return;
+    b.disabled = !!this._refreshing;
+    b.innerHTML = this._refreshing ? '<span class="spin"></span>' : "⟳";
   }
 
   async _refreshCatalog() {
     this._setStatus(this._t("refreshing"));
+    this._refreshing = true;
+    this._syncRefresh();
     const res = await this._api("POST", "catalog/refresh");
     this._toast(res.output || this._t("catalog_updated"));
     await this._load();
@@ -797,6 +811,34 @@ class HaAppsPanel extends HTMLElement {
       .sort((a, b) => b.installed - a.installed || a.name.localeCompare(b.name));
   }
 
+  /* Buttons that mirror the cached install state (stop/webui/ports,
+     logs) — `mutating` adds update + remove, which only appear once
+     the fresh list confirmed the state. */
+  _stateButtons(a, buttons, mutating) {
+    if (a.state === "running") {
+      buttons.push(`<button data-act="stop">${this._t("stop")}</button>`);
+      if (a.webui_port)
+        buttons.push(
+          `<a class="btn primary" href="${this._webuiUrl(a)}" ` +
+          `target="_blank" rel="noopener">${this._t("open_web_ui")}</a>`
+        );
+      for (const p of a.extra_ports || [])
+        buttons.push(
+          p === a.webui_port
+            ? `<span class="portnum">${this._t("port_btn", {port: p})}</span>`
+            : `<a class="btn" href="${this._portUrl(p)}" target="_blank" rel="noopener">` +
+              `${this._t("port_btn", {port: p})}</a>`
+        );
+    } else {
+      buttons.push(`<button class="primary" data-act="start">${this._t("start")}</button>`);
+    }
+    if (mutating && a.update_available)
+      buttons.push(`<button data-act="update">${this._t("update_action")}</button>`);
+    buttons.push(`<button data-act="logs">${this._t("logs")}</button>`);
+    if (mutating)
+      buttons.push(`<button class="danger" data-act="remove">${this._t("remove")}</button>`);
+  }
+
   _renderList() {
     const list = this._filtered();
     const grid = this.shadowRoot.querySelector("#grid");
@@ -852,8 +894,13 @@ class HaAppsPanel extends HTMLElement {
     }
 
     const buttons = [];
-    if (!this._verified) {
-      /* cached card — install state not checked yet, hide all actions */
+    if (!this._verified && a.installed) {
+      /* cached card — mutating actions wait for the fresh install
+         state, the read-only buttons render from cache */
+      this._stateButtons(a, buttons, false);
+    } else if (!this._verified) {
+      /* cached card, not installed — install button waits for the
+         fresh list */
     } else if (busy) {
       buttons.push(`<button disabled class="busy"><span class="spin"></span>${this._t("busy")}</button>`);
     } else if (!a.installed && !a.supported) {
@@ -869,27 +916,7 @@ class HaAppsPanel extends HTMLElement {
             : "")
       );
     } else {
-      if (a.state === "running") {
-        buttons.push(`<button data-act="stop">${this._t("stop")}</button>`);
-        if (a.webui_port)
-          buttons.push(
-            `<a class="btn primary" href="${this._webuiUrl(a)}" ` +
-            `target="_blank" rel="noopener">${this._t("open_web_ui")}</a>`
-          );
-        for (const p of a.extra_ports || [])
-          buttons.push(
-            p === a.webui_port
-              ? `<span class="portnum">${this._t("port_btn", {port: p})}</span>`
-              : `<a class="btn" href="${this._portUrl(p)}" target="_blank" rel="noopener">` +
-                `${this._t("port_btn", {port: p})}</a>`
-          );
-      } else {
-        buttons.push(`<button class="primary" data-act="start">${this._t("start")}</button>`);
-      }
-      if (a.update_available)
-        buttons.push(`<button data-act="update">${this._t("update_action")}</button>`);
-      buttons.push(`<button data-act="logs">${this._t("logs")}</button>`);
-      buttons.push(`<button class="danger" data-act="remove">${this._t("remove")}</button>`);
+      this._stateButtons(a, buttons, true);
     }
 
     card.style.cursor = "pointer";
