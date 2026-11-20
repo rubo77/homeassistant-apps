@@ -47,7 +47,8 @@ const PANEL_I18N = {
     "host": "Host",
     "description": "Description",
     "options_defaults": "Options (defaults)",
-    "readme": "README",
+    "readme": "Documentation",
+    "full_docs": "Full documentation",
     "installed_state": "installed ({state})",
     "not_installed": "not installed",
     "installed_suffix": "(installed)",
@@ -163,7 +164,8 @@ const PANEL_I18N = {
     "host": "Host",
     "description": "Beschreibung",
     "options_defaults": "Optionen (Defaults)",
-    "readme": "README",
+    "readme": "Dokumentation",
+    "full_docs": "Vollständige Doku",
     "installed_state": "installiert ({state})",
     "not_installed": "nicht installiert",
     "installed_suffix": "(installiert)",
@@ -257,7 +259,7 @@ class HaAppsPanel extends HTMLElement {
     this._addons = [];
     this._filter = "";
     this._repo = "all";
-    this._tags = new Map();
+    this._tags = this._loadTags();
     this._busy = new Set();
   }
 
@@ -296,11 +298,27 @@ class HaAppsPanel extends HTMLElement {
   }
 
   async _load() {
-    this._setStatus(this._t("loading_catalog"));
+    const cached = this._loadAddons();
+    if (cached.length && !this._addons.length) {
+      // stale-while-revalidate: cached list renders instantly, the
+      // fresh fetch below replaces it once the CLI round-trip lands
+      this._addons = cached;
+      this._renderList();
+    } else {
+      this._setStatus(this._t("loading_catalog"));
+    }
+    this._status = this._loadStatus();
+    this._renderDisk();
     try {
-      this._status = await this._api("GET", "status").catch(() => null);
+      const fresh = await this._api("GET", "status").catch(() => null);
+      if (fresh) {
+        this._status = fresh;
+        this._saveStatus(fresh);
+      }
       this._renderDisk();
-      this._addons = await this._api("GET", "addons");
+      const addons = await this._api("GET", "addons");
+      this._addons = addons;
+      this._saveAddons(addons);
       if (this._addons.length === 0) {
         this._setStatus(
           this._t("catalog_empty")
@@ -309,7 +327,7 @@ class HaAppsPanel extends HTMLElement {
       }
       this._renderList();
     } catch (_err) {
-      this._setStatus(this._t("catalog_failed"));
+      if (!this._addons.length) this._setStatus(this._t("catalog_failed"));
     }
   }
 
@@ -449,7 +467,7 @@ class HaAppsPanel extends HTMLElement {
         this._api("GET", `readme/${repo}/${slug}`)
           .catch(() => ({ markdown: "" })),
       ]);
-      this._renderDetail(detail, info, readme.markdown || "");
+      this._renderDetail(detail, info, readme.markdown || "", readme.doc || "");
     } catch (err) {
       const msg = err?.error || err?.message || JSON.stringify(err);
       console.error("[APPS] detail load failed:", slug, err);
@@ -467,7 +485,7 @@ class HaAppsPanel extends HTMLElement {
     this.shadowRoot.querySelector("#browser").style.display = "block";
   }
 
-  _renderDetail(detail, a, markdown) {
+  _renderDetail(detail, a, markdown, docName) {
     const optRows = Object.entries(a.options || {}).map(
       ([k, v]) =>
         `<tr><td><code>${k}</code></td><td>${JSON.stringify(v)}</td></tr>`
@@ -529,7 +547,7 @@ class HaAppsPanel extends HTMLElement {
         : ""}
       ${portRows.length ? `<h3>${this._t("ports")}</h3><table class="meta"><tr><th>${this._t("container")}</th><th>${this._t("host")}</th><th>${this._t("description")}</th></tr>${portRows.join("")}</table>` : ""}
       ${optRows.length ? `<h3>${this._t("options_defaults")}</h3><table class="meta">${optRows.join("")}</table>` : ""}
-      ${markdown ? `<h3>${this._t("readme")}</h3><div class="md">${this._md(markdown, a.repo, a.slug)}</div>` : ""}
+      ${markdown ? `<h3>${this._t("readme")}</h3><div class="md">${this._md(this._firstBlocks(markdown, 2), a.repo, a.slug)}</div><p><a href="/api/ha_apps/raw/${a.repo}/${a.slug}/${docName || "DOCS.md"}" target="_blank" rel="noopener">${this._t("full_docs")} ↗</a></p>` : ""}
       <button id="dback2">${this._t("back_to_store")}</button>`;
     detail.querySelectorAll("#dback,#dback2").forEach((b) =>
       b.addEventListener("click", () => this._showList())
@@ -646,6 +664,62 @@ class HaAppsPanel extends HTMLElement {
     this.shadowRoot.querySelector("#grid").innerHTML = "";
   }
 
+  _loadTags() {
+    try {
+      const saved = JSON.parse(
+        sessionStorage.getItem("ha-apps-tags") || "[]"
+      );
+      if (!saved.every((e) => Array.isArray(e) && e.length === 2))
+        throw new Error("bad shape");
+      return new Map(saved);
+    } catch (e) {
+      console.warn("[APPS] saved tag filter unreadable, resetting:", e);
+      return new Map();
+    }
+  }
+
+  _saveTags() {
+    sessionStorage.setItem("ha-apps-tags", JSON.stringify([...this._tags]));
+  }
+
+  _loadAddons() {
+    try {
+      const saved = JSON.parse(
+        sessionStorage.getItem("ha-apps-addons") || "[]"
+      );
+      if (!Array.isArray(saved)) throw new Error("bad shape");
+      return saved;
+    } catch (e) {
+      console.warn("[APPS] saved catalog unreadable, resetting:", e);
+      return [];
+    }
+  }
+
+  _saveAddons(addons) {
+    sessionStorage.setItem("ha-apps-addons", JSON.stringify(addons));
+  }
+
+  _firstBlocks(src, n) {
+    return src.split(/\n\s*\n/).slice(0, n).join("\n\n");
+  }
+
+  _loadStatus() {
+    try {
+      const saved = JSON.parse(
+        sessionStorage.getItem("ha-apps-status") || "null"
+      );
+      if (saved && typeof saved !== "object") throw new Error("bad shape");
+      return saved;
+    } catch (e) {
+      console.warn("[APPS] saved status unreadable, resetting:", e);
+      return null;
+    }
+  }
+
+  _saveStatus(status) {
+    sessionStorage.setItem("ha-apps-status", JSON.stringify(status));
+  }
+
   _filtered() {
     const q = this._filter.toLowerCase();
     return this._addons
@@ -672,6 +746,7 @@ class HaAppsPanel extends HTMLElement {
     st.querySelector("#instlink").addEventListener("click", (e) => {
       e.preventDefault();
       this._tags = new Map([["installed", 1]]);
+      this._saveTags();
       this._syncFilterMenu();
       this._renderList();
     });
@@ -895,7 +970,7 @@ class HaAppsPanel extends HTMLElement {
         </div>
       </div>
       <span id="disk" class="disk"></span>
-      <button id="refresh">${this._t("refresh_catalog")}</button>
+      <button id="refresh" title="${this._t("refresh_catalog")}" aria-label="${this._t("refresh_catalog")}">⟳</button>
     </div>
     <div id="browser">
       <div id="status"></div>
@@ -948,10 +1023,12 @@ class HaAppsPanel extends HTMLElement {
         const next = cur === 0 ? 1 : cur === 1 ? -1 : 0;
         next === 0 ? this._tags.delete(cb.value) : this._tags.set(cb.value, next);
       }
+      this._saveTags();
       this._syncFilterMenu();
       this._showList();
       this._renderList();
     });
+    this._syncFilterMenu();
     this.shadowRoot
       .querySelector("#refresh")
       .addEventListener("click", () => this._refreshCatalog());
