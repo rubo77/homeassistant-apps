@@ -30,6 +30,8 @@ const PANEL_I18N = {
     "web_port": "Web port",
     "auto_setup": "⚙️ Auto-Setup: {notes}",
     "todo_after": "📋 Still to do after installation:",
+    "pi_discovery": "This add-on normally announces itself to Home Assistant via Supervisor discovery — that is absent here. Add the matching integration manually (Settings → Devices & services → + Add integration), using this machine's IP and the mapped port.",
+    "pi_no_ingress": "The web UI does not run embedded (no ingress) — open it directly on the mapped port in your browser.",
     "loading_details": "Loading details …",
     "details_failed": "Details could not be loaded: {msg}",
     "back": "Back",
@@ -147,6 +149,8 @@ const PANEL_I18N = {
     "web_port": "Web-Port",
     "auto_setup": "⚙️ Auto-Setup: {notes}",
     "todo_after": "📋 Nach der Installation noch zu tun:",
+    "pi_discovery": "Dieses Add-on meldet sich normalerweise per Supervisor-Discovery bei Home Assistant an — das fehlt hier. Die passende Integration manuell hinzufügen (Einstellungen → Geräte & Dienste → + Integration hinzufügen), mit der IP dieses Rechners und dem gemappten Port.",
+    "pi_no_ingress": "Die Weboberfläche läuft nicht eingebettet (kein Ingress) — im Browser direkt über den gemappten Port öffnen.",
     "loading_details": "Lade Details …",
     "details_failed": "Details konnten nicht geladen werden: {msg}",
     "back": "Zurück",
@@ -272,6 +276,17 @@ class HaAppsPanel extends HTMLElement {
     }
   }
 
+  connectedCallback() {
+    this._focusSearch();
+  }
+
+  _focusSearch() {
+    requestAnimationFrame(() => {
+      const q = this.shadowRoot?.querySelector("#q");
+      if (q && q.isConnected && !q.value) q.focus();
+    });
+  }
+
   async _api(method, path, body) {
     try {
       return await this._hass.callApi(method, `ha_apps/${path}`, body);
@@ -282,6 +297,14 @@ class HaAppsPanel extends HTMLElement {
     }
   }
 
+
+  _note(n) {
+    /* post_install notes can be plain strings or {"key", "text"} pairs;
+       keyed entries go through _t so the panel renders them localized */
+    if (typeof n === "string") return n;
+    const v = this._t(n.key);
+    return v === n.key ? n.text || n.key : v;
+  }
 
   _t(key, params) {
     /* HA's localize() only has resources for domains the frontend loaded;
@@ -370,7 +393,7 @@ class HaAppsPanel extends HTMLElement {
         : ""}
       ${(a.post_install || []).length
         ? `<div class="notebox">${this._t("todo_after")}<ul>` +
-          a.post_install.map((n) => `<li>${n}</li>`).join("") +
+          a.post_install.map((n) => `<li>${this._note(n)}</li>`).join("") +
           `</ul></div>`
         : ""}`;
     dlg.querySelector("#dlggo").disabled = !!this._diskLow;
@@ -542,7 +565,7 @@ class HaAppsPanel extends HTMLElement {
         .join("")}</table>
       ${(a.post_install || []).length
         ? `<div class="notebox">${this._t("todo_after")}<ul>` +
-          a.post_install.map((n) => `<li>${n}</li>`).join("") +
+          a.post_install.map((n) => `<li>${this._note(n)}</li>`).join("") +
           `</ul></div>`
         : ""}
       ${portRows.length ? `<h3>${this._t("ports")}</h3><table class="meta"><tr><th>${this._t("container")}</th><th>${this._t("host")}</th><th>${this._t("description")}</th></tr>${portRows.join("")}</table>` : ""}
@@ -989,11 +1012,16 @@ class HaAppsPanel extends HTMLElement {
       <div class="dlgbtns"><button id="rmcancel">${this._t("cancel")}</button>
       <button id="rmpurge" class="danger">${this._t("remove_purge")}</button>
       <button id="rmkeep" class="primary">${this._t("remove_keep")}</button></div></dialog>`;
-    this.shadowRoot.querySelector("#q").addEventListener("input", (e) => {
+    const q = this.shadowRoot.querySelector("#q");
+    q.addEventListener("input", (e) => {
       this._filter = e.target.value;
       this._showList();
       this._renderList();
     });
+    /* the hass setter can render before the element is attached to the
+       document — focus() on a disconnected element silently no-ops, so
+       retry from connectedCallback and after the next frame */
+    this._focusSearch();
     this.shadowRoot.querySelector("#repo").addEventListener("change", (e) => {
       this._repo = e.target.value;
       this._showList();
