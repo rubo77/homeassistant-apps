@@ -28,6 +28,31 @@ def _addon_dir(repo: str, slug: str) -> Path | None:
             return base
     return None
 
+
+def _find_icon(base: Path) -> Path | None:
+    for name in ("icon.png", "logo.png"):
+        icon = base / name
+        if icon.is_file():
+            return icon
+    return None
+
+
+def _readme_markdown(base: Path) -> tuple[str, str] | None:
+    for name in ("DOCS.md", "README.md", "readme.md"):
+        doc = base / name
+        if doc.is_file():
+            return name, doc.read_text(errors="replace")
+    return None
+
+
+def _raw_target(base: Path, path: str) -> Path | str | None:
+    """Resolved path inside base; 'bad' on traversal, None when missing."""
+    base_r = base.resolve()
+    target = (base_r / path).resolve()
+    if not str(target).startswith(str(base_r) + "/"):
+        return "bad"
+    return target if target.is_file() else None
+
 _LOGGER = logging.getLogger(__name__)
 
 PANEL_JS = Path(__file__).parent / "panel" / "panel.js"
@@ -55,29 +80,37 @@ STUB_TOKEN_FILE = (
 )
 
 
+def _stub_token_exists() -> bool:
+    try:
+        json.loads(STUB_TOKEN_FILE.read_text())
+    except (OSError, json.JSONDecodeError):
+        return False
+    return True
+
+
+def _write_stub_token(token: str) -> None:
+    STUB_TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+    STUB_TOKEN_FILE.write_text(json.dumps({"token": token}))
+    STUB_TOKEN_FILE.chmod(0o600)
+
+
 async def _ensure_addon_token(request):
     """Long-lived HA access token the supervisor stub uses when it
     proxies /core/api calls from add-ons (homeassistant_api/auth_api).
     Minted once for the admin performing the install."""
-    if STUB_TOKEN_FILE.exists():
-        try:
-            json.loads(STUB_TOKEN_FILE.read_text())
-            return
-        except (OSError, json.JSONDecodeError):
-            pass
+    hass = request.app["hass"]
+    if await hass.async_add_executor_job(_stub_token_exists):
+        return
     user = request.get("hass_user")
     if user is None:
         return
-    hass = request.app["hass"]
     refresh = await hass.auth.async_create_refresh_token(
         user,
         client_name="ha-apps add-on token",
         token_type=TOKEN_TYPE_LONG_LIVED_ACCESS_TOKEN,
     )
     token = hass.auth.async_create_access_token(refresh)
-    STUB_TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
-    STUB_TOKEN_FILE.write_text(json.dumps({"token": token}))
-    STUB_TOKEN_FILE.chmod(0o600)
+    await hass.async_add_executor_job(_write_stub_token, token)
     _LOGGER.info(
         "[HA_APPS] minted HA API token for add-ons (user %s)", user.name
     )
@@ -274,13 +307,12 @@ class HaAppsIconView(HomeAssistantView):
     async def get(self, request: web.Request, repo: str, slug: str) -> web.Response:
         if "/" in slug or ".." in slug or "/" in repo or ".." in repo:
             return web.Response(status=HTTPStatus.BAD_REQUEST)
-        base = _addon_dir(repo, slug)
+        hass = request.app["hass"]
+        base = await hass.async_add_executor_job(_addon_dir, repo, slug)
         if base is None:
             return web.Response(status=HTTPStatus.NOT_FOUND)
-        icon = base / "icon.png"
-        if not icon.exists():
-            icon = base / "logo.png"
-        if not icon.exists():
+        icon = await hass.async_add_executor_job(_find_icon, base)
+        if icon is None:
             return web.Response(status=HTTPStatus.NOT_FOUND)
         return web.FileResponse(icon)
 
@@ -295,17 +327,15 @@ class HaAppsReadmeView(HomeAssistantView):
     async def get(self, request: web.Request, repo: str, slug: str) -> web.Response:
         if "/" in slug or ".." in slug or "/" in repo or ".." in repo:
             return web.Response(status=HTTPStatus.BAD_REQUEST)
-        base = _addon_dir(repo, slug)
+        hass = request.app["hass"]
+        base = await hass.async_add_executor_job(_addon_dir, repo, slug)
         if base is None:
             return web.json_response({"markdown": ""})
-        for name in ("DOCS.md", "README.md", "readme.md"):
-            doc = base / name
-            if doc.exists():
-                return web.json_response({
-                    "markdown": doc.read_text(errors="replace"),
-                    "doc": name,
-                })
-        return web.json_response({"markdown": ""})
+        found = await hass.async_add_executor_job(_readme_markdown, base)
+        if found is None:
+            return web.json_response({"markdown": ""})
+        name, markdown = found
+        return web.json_response({"markdown": markdown, "doc": name})
 
 
 class HaAppsRawView(HomeAssistantView):
@@ -318,18 +348,21 @@ class HaAppsRawView(HomeAssistantView):
     async def get(
         self, request: web.Request, repo: str, slug: str, path: str
     ) -> web.Response:
-        found = _addon_dir(repo, slug)
+        hass = request.app["hass"]
+        found = await hass.async_add_executor_job(_addon_dir, repo, slug)
         if found is None:
             return web.Response(status=HTTPStatus.NOT_FOUND)
-        base = found.resolve()
-        target = (base / path).resolve()
-        if not str(target).startswith(str(base) + "/"):
+        target = await hass.async_add_executor_job(_raw_target, found, path)
+        if target == "bad":
             return web.Response(status=HTTPStatus.BAD_REQUEST)
-        if not target.is_file():
+        if target is None:
             return web.Response(status=HTTPStatus.NOT_FOUND)
         if target.suffix == ".md":
+            markdown = await hass.async_add_executor_job(
+                lambda: target.read_text(errors="replace")
+            )
             return web.Response(
-                text=target.read_text(errors="replace"),
+                text=markdown,
                 content_type="text/plain",
             )
         return web.FileResponse(target)
