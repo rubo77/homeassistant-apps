@@ -37,7 +37,6 @@ const PANEL_I18N = {
     "loading_details": "Loading details …",
     "details_failed": "Details could not be loaded: {msg}",
     "back": "Back",
-    "details_btn": "Details →",
     "back_to_store": "← Back to store",
     "disabled": "disabled",
     "size": "Size",
@@ -158,7 +157,6 @@ const PANEL_I18N = {
     "loading_details": "Lade Details …",
     "details_failed": "Details konnten nicht geladen werden: {msg}",
     "back": "Zurück",
-    "details_btn": "Details →",
     "back_to_store": "← Zurück zum Store",
     "disabled": "deaktiviert",
     "size": "Größe",
@@ -940,14 +938,10 @@ class HaAppsPanel extends HTMLElement {
       <div class="desc">${a.description || ""}</div>
       <div class="size">${a.image_size ? `💾 ${a.image_size}` : a.download_size_mb ? `💾 ~${a.download_size_mb} MB` : ""}</div>
       <div class="badges">${badges.join(" ")}</div>
-      <div class="actions">${buttons.join("")}<button data-detail="${a.slug}">${this._t("details_btn")}</button></div>`;
+      <div class="actions">${buttons.join("")}</div>`;
 
-    card.querySelectorAll("button[data-act],button[data-detail]").forEach((btn) => {
+    card.querySelectorAll("button[data-act]").forEach((btn) => {
       btn.addEventListener("click", () => {
-        if (btn.dataset.detail) {
-          this._openDetail(btn.dataset.detail);
-          return;
-        }
         const act = btn.dataset.act;
         if (act === "logs") {
           this._showLogs(a.slug);

@@ -290,6 +290,12 @@ def cpu_has_flag(flag):
 # HA-side integration that ha_apps wires up automatically after the
 # container is up (wyoming config flow with host/port)
 SPECIAL_INSTALLERS = {
+    "sqlite-web": {
+        "auto": [
+            "The store detects the web UI port and publishes it "
+            "automatically — open it via the Web UI button",
+        ],
+    },
     "piper": {
         "publish": ["127.0.0.1:10200:10200"],
         "wait_port": 10200,
