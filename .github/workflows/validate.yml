@@ -24,6 +24,3 @@ jobs:
         uses: hacs/action@main
         with:
           category: integration
-          # brand icons land in home-assistant/brands together with the
-          # hacs/default listing PR
-          ignore: brands
