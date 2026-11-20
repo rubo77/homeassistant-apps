@@ -32,6 +32,7 @@ const PANEL_I18N = {
     "todo_after": "📋 Still to do after installation:",
     "pi_discovery": "This add-on normally announces itself to Home Assistant via Supervisor discovery — that is absent here. Add the matching integration manually (Settings → Devices & services → + Add integration), using this machine's IP and the mapped port.",
     "pi_no_ingress": "The web UI does not run embedded (no ingress) — open it directly on the mapped port in your browser.",
+    "pi_no_ingress_port": "The web UI does not run embedded (no ingress) — open it in your browser on this machine, port {port}.",
     "loading_details": "Loading details …",
     "details_failed": "Details could not be loaded: {msg}",
     "back": "Back",
@@ -151,6 +152,7 @@ const PANEL_I18N = {
     "todo_after": "📋 Nach der Installation noch zu tun:",
     "pi_discovery": "Dieses Add-on meldet sich normalerweise per Supervisor-Discovery bei Home Assistant an — das fehlt hier. Die passende Integration manuell hinzufügen (Einstellungen → Geräte & Dienste → + Integration hinzufügen), mit der IP dieses Rechners und dem gemappten Port.",
     "pi_no_ingress": "Die Weboberfläche läuft nicht eingebettet (kein Ingress) — im Browser direkt über den gemappten Port öffnen.",
+    "pi_no_ingress_port": "Die Weboberfläche läuft nicht eingebettet (kein Ingress) — im Browser auf diesem Rechner über Port {port} öffnen.",
     "loading_details": "Lade Details …",
     "details_failed": "Details konnten nicht geladen werden: {msg}",
     "back": "Zurück",
@@ -302,7 +304,7 @@ class HaAppsPanel extends HTMLElement {
     /* post_install notes can be plain strings or {"key", "text"} pairs;
        keyed entries go through _t so the panel renders them localized */
     if (typeof n === "string") return n;
-    const v = this._t(n.key);
+    const v = this._t(n.key, n.params);
     return v === n.key ? n.text || n.key : v;
   }
 

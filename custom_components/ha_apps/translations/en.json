@@ -127,6 +127,7 @@
     "filter_hint": "click: include → exclude → off",
     "full_docs": "Full documentation",
     "pi_discovery": "This add-on normally announces itself to Home Assistant via Supervisor discovery — that is absent here. Add the matching integration manually (Settings → Devices & services → + Add integration), using this machine's IP and the mapped port.",
-    "pi_no_ingress": "The web UI does not run embedded (no ingress) — open it directly on the mapped port in your browser."
+    "pi_no_ingress": "The web UI does not run embedded (no ingress) — open it directly on the mapped port in your browser.",
+    "pi_no_ingress_port": "The web UI does not run embedded (no ingress) — open it in your browser on this machine, port {port}."
   }
 }

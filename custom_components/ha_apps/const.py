@@ -21,5 +21,5 @@ LOCAL_REPO_DIR = os.environ.get(
 )
 PANEL_JS_URL = "/api/ha_apps/panel.js"
 # bump on every panel.js change — the module_url is cached aggressively
-PANEL_JS_VERSION = "0.2.25"
+PANEL_JS_VERSION = "0.2.26"
 PANEL_URL_PATH = "ha-apps"

@@ -304,6 +304,12 @@ SPECIAL_INSTALLERS = {
     },
 }
 
+# ingress-only add-ons that declare neither ports nor webui/ingress_port:
+# the image's default listen port, published so the UI stays reachable
+WEBUI_PORT_DEFAULTS = {
+    "sqlite-web": 8080,
+}
+
 # extra payload some add-ons download at runtime (models, voices)
 SIZE_NOTES = {
     "piper": "plus ~20–60 MB per voice (downloaded on first TTS call)",
@@ -349,7 +355,7 @@ POST_INSTALL_NOTES = {
 }
 
 
-def post_install_notes(slug, cfg, needs_sup):
+def post_install_notes(slug, cfg, needs_sup, webui_port=None):
     """User-facing checklist of manual steps needed after install."""
     notes = list(POST_INSTALL_NOTES.get(slug, []))
     if "discovery" in needs_sup and slug not in POST_INSTALL_NOTES and slug not in SPECIAL_INSTALLERS:
@@ -364,13 +370,24 @@ def post_install_notes(slug, cfg, needs_sup):
             }
         )
     if cfg.get("ingress"):
-        notes.append(
-            {
-                "key": "pi_no_ingress",
-                "text": "The web UI does not run embedded (no ingress) — "
-                "open it directly on the mapped port in your browser.",
-            }
-        )
+        if webui_port:
+            notes.append(
+                {
+                    "key": "pi_no_ingress_port",
+                    "params": {"port": webui_port},
+                    "text": "The web UI does not run embedded (no "
+                    f"ingress) — open http://<this machine>:{webui_port} "
+                    "in your browser.",
+                }
+            )
+        else:
+            notes.append(
+                {
+                    "key": "pi_no_ingress",
+                    "text": "The web UI does not run embedded (no ingress) — "
+                    "open it directly on the mapped port in your browser.",
+                }
+            )
     return notes
 
 
@@ -449,6 +466,8 @@ def normalize(slug, repo_name, cfg, addon_dir, arch, have_services=None):
             webui_port = int(host_port)
         else:
             webui_port = int(container_port) if container_port.isdigit() else None
+    if webui_port is None:
+        webui_port = WEBUI_PORT_DEFAULTS.get(slug)
     needs_sup = [k for k in SUPERVISOR_KEYS if cfg.get(k)]
     icon = None
     for cand in ("icon.png", "logo.png"):
@@ -476,7 +495,7 @@ def normalize(slug, repo_name, cfg, addon_dir, arch, have_services=None):
         "host_network": bool(cfg.get("host_network")),
         "installed": False,
         "state": None,
-        "post_install": post_install_notes(slug, cfg, needs_sup),
+        "post_install": post_install_notes(slug, cfg, needs_sup, webui_port),
         "special": SPECIAL_INSTALLERS.get(slug),
         "size_note": SIZE_NOTES.get(slug),
         "raw": cfg,

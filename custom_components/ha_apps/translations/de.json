@@ -127,6 +127,7 @@
     "filter_hint": "Klick: einschließen → ausschließen → aus",
     "full_docs": "Vollständige Doku",
     "pi_discovery": "Dieses Add-on meldet sich normalerweise per Supervisor-Discovery bei Home Assistant an — das fehlt hier. Die passende Integration manuell hinzufügen (Einstellungen → Geräte & Dienste → + Integration hinzufügen), mit der IP dieses Rechners und dem gemappten Port.",
-    "pi_no_ingress": "Die Weboberfläche läuft nicht eingebettet (kein Ingress) — im Browser direkt über den gemappten Port öffnen."
+    "pi_no_ingress": "Die Weboberfläche läuft nicht eingebettet (kein Ingress) — im Browser direkt über den gemappten Port öffnen.",
+    "pi_no_ingress_port": "Die Weboberfläche läuft nicht eingebettet (kein Ingress) — im Browser auf diesem Rechner über Port {port} öffnen."
   }
 }
