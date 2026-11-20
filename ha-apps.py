@@ -354,21 +354,22 @@ def post_install_notes(slug, cfg, needs_sup):
     notes = list(POST_INSTALL_NOTES.get(slug, []))
     if "discovery" in needs_sup and slug not in POST_INSTALL_NOTES and slug not in SPECIAL_INSTALLERS:
         notes.append(
-            "This add-on normally announces itself to HA via Supervisor "
-            "discovery — that is absent. Add the matching integration "
-            "manually (Settings → Devices & services → + Add "
-            "integration), using this machine's IP and the mapped port."
-        )
-    if "homeassistant_api" in needs_sup:
-        notes.append(
-            "The add-on wants the HA API — without the Supervisor proxy "
-            "that fails; you may need a long-lived access token in the "
-            "add-on options (see its docs)."
+            {
+                "key": "pi_discovery",
+                "text": "This add-on normally announces itself to HA via "
+                "Supervisor discovery — that is absent. Add the matching "
+                "integration manually (Settings → Devices & services → "
+                "+ Add integration), using this machine's IP and the "
+                "mapped port.",
+            }
         )
     if cfg.get("ingress"):
         notes.append(
-            "The web UI does not run embedded (no ingress) — open it "
-            "directly on the mapped port in your browser."
+            {
+                "key": "pi_no_ingress",
+                "text": "The web UI does not run embedded (no ingress) — "
+                "open it directly on the mapped port in your browser.",
+            }
         )
     return notes
 
