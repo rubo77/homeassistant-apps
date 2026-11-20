@@ -502,11 +502,42 @@ def container_name(slug):
     return f"{CONTAINER_PREFIX}{slug}"
 
 
-def detect_listen_port(cname, timeout=20):
-    """TCP port the container actually LISTENs on, read from the host via
-    /proc/<container-pid>/net/tcp — works for images that declare no
-    EXPOSE at all (common for hassio base images). Prefers port 80,
-    else the lowest listening port."""
+def _tcp_listeners(pid):
+    """(port, bind_ip) of TCP LISTEN sockets in a pid's netns."""
+    out = []
+    for table in (f"/proc/{pid}/net/tcp", f"/proc/{pid}/net/tcp6"):
+        try:
+            lines = open(table).read().splitlines()[1:]
+        except OSError:
+            continue
+        for line in lines:
+            cols = line.split()
+            if cols[3] != "0A":  # LISTEN
+                continue
+            iphex, porthex = cols[1].rsplit(":", 1)
+            if table.endswith("tcp6"):
+                num = int(iphex, 16)
+                bind = "0.0.0.0" if num == 0 else ("127.0.0.1" if num == 1 else "other")
+            else:
+                h = int(iphex, 16)
+                bind = (
+                    f"{h & 0xFF}.{(h >> 8) & 0xFF}."
+                    f"{(h >> 16) & 0xFF}.{(h >> 24) & 0xFF}"
+                )
+            out.append((int(porthex, 16), bind))
+    return out
+
+
+def detect_listen_socket(cname, timeout=20):
+    """(port, loopback) the add-on's likely web UI listener, read from
+    the host via /proc/<container-pid>/net/tcp — works for images that
+    declare no EXPOSE (common for hassio base images). Only wildcard
+    and 127.0.0.1 binds are candidates: a published host port can only
+    reach wildcard sockets, while a loopback-bound app needs the socat
+    sidecar. Docker's embedded DNS (127.0.0.11) is excluded. Prefers
+    port 80 on a wildcard bind, else the lowest candidate port — in
+    hassio images the ingress front-end tends to sit above the app's
+    own port."""
     deadline = time.time() + timeout
     prev = set()
     while time.time() < deadline:
@@ -515,25 +546,47 @@ def detect_listen_port(cname, timeout=20):
             capture=True, check=False,
         )
         pid = (insp.stdout or "").strip()
-        listeners = set()
+        cand = set()
         if pid and pid != "0":
-            for table in (f"/proc/{pid}/net/tcp", f"/proc/{pid}/net/tcp6"):
-                try:
-                    lines = open(table).read().splitlines()[1:]
-                except OSError:
+            for port, bind in _tcp_listeners(pid):
+                if bind == "127.0.0.11":  # docker embedded DNS resolver
                     continue
-                for line in lines:
-                    cols = line.split()
-                    if cols[3] == "0A":  # LISTEN
-                        listeners.add(int(cols[1].rsplit(":", 1)[1], 16))
-        # only ports that persist across two polls count — crash-looping
+                cand.add((port, bind == "127.0.0.1"))
+        # only sockets that persist across two polls count — crash-looping
         # init systems briefly bind throwaway sockets
-        stable = sorted(listeners & prev)
+        stable = sorted(cand & prev)
         if stable:
-            return 80 if 80 in stable else stable[0]
-        prev = listeners
+            for port, loopback in stable:
+                if port == 80 and not loopback:
+                    return port, loopback
+            return stable[0]
+        prev = cand
         time.sleep(1)
     return None
+
+
+FWD_IMAGE = "alpine/socat"
+
+
+def _start_forwarder(cname, slug, fwd_port, target_port):
+    """socat sidecar sharing the add-on's netns — binds a wildcard
+    listener that forwards to a loopback-bound app port inside the
+    container, which a published host port cannot reach otherwise."""
+    fname = cname + "-fwd"
+    run([DOCKER, "pull", FWD_IMAGE], check=False, capture=True)
+    run([DOCKER, "rm", "-f", fname], check=False, capture=True)
+    run([
+        DOCKER, "run", "-d",
+        "--name", fname,
+        "--network", f"container:{cname}",
+        "--restart", "unless-stopped",
+        "--label", "ha_apps.managed=1",
+        "--label", f"ha_apps.slug={slug}",
+        "--label", "ha_apps.forwarder=1",
+        FWD_IMAGE,
+        f"TCP-LISTEN:{fwd_port},fork,reuseaddr",
+        f"TCP:127.0.0.1:{target_port}",
+    ])
 
 
 def free_host_port(preferred):
@@ -587,7 +640,10 @@ def build_run_args(addon, slug, extra_ports=()):
             args += ["-p", f"{ingress_port}:{ingress_port}/tcp"]
             published[str(ingress_port)] = int(ingress_port)
         elif webui_port and str(webui_port) not in published:
-            args += ["-p", f"{webui_port}:{webui_port}/tcp"]
+            # the container-side target differs from the host port when
+            # a socat sidecar terminates the publish inside the netns
+            target = addon.get("webui_target") or webui_port
+            args += ["-p", f"{webui_port}:{target}/tcp"]
             published[str(webui_port)] = int(webui_port)
         for pub in extra_ports:
             # either host:container or bind_ip:host:container
@@ -818,7 +874,11 @@ def enrich(addons):
         )
         webui = addon.get("webui") or ""
         if "[HOST]" in webui:
-            url = webui.replace("[HOST]", host_addr())
+            # [HOST] stays unresolved — the egress IP (host_addr) can be
+            # on an interface the client cannot reach (e.g. a wifi
+            # default route while the browser uses the LAN cable). The
+            # panel substitutes the host it reached Home Assistant on.
+            url = webui
             for cport, hport in (addon.get("ports") or {}).items():
                 cp = cport.split("/")[0]
                 url = url.replace(f"[PORT:{cp}]", str(hport or cp))
@@ -827,6 +887,8 @@ def enrich(addons):
         if meta:
             addon["installed_version"] = meta.get("version")
             addon["webui_port"] = meta.get("webui_port")
+            addon["webui_target"] = meta.get("webui_target")
+            addon["fwd"] = meta.get("fwd")
             addon["extra_ports"] = meta.get("extra_ports", [])
             if meta.get("post_install"):
                 addon["post_install"] = meta["post_install"]
@@ -995,23 +1057,50 @@ def cmd_install(args):
     # socket table, then republish. Images typically declare no EXPOSE,
     # so this can only be learned once the app is up.
     host_port = None
+    webui_target = None
+    fwd = None
+    extra_publish = list(extra_ports)
     if (
         addon["raw"].get("ingress")
         and not addon.get("ingress_port")
         and not addon.get("webui_port")
         and not addon["host_network"]
     ):
-        detected = detect_listen_port(cname)
+        detected = detect_listen_socket(cname)
         if detected:
-            host_port = free_host_port(detected)
-            print(
-                f"[ha-apps] no ingress here — republishing web UI "
-                f"on port {host_port} (container port {detected})"
-            )
-            extra_ports.append(f"{host_port}:{detected}")
-            run([DOCKER, "rm", "-f", cname], capture=True)
-            run_args = build_run_args(addon, args.slug, extra_ports=extra_ports)
-            run(run_args)
+            cport, loopback = detected
+            host_port = free_host_port(cport)
+            if loopback:
+                # a published port only reaches wildcard binds — for a
+                # 127.0.0.1-bound app a socat sidecar in the same netns
+                # forwards wildcard:fwd_port to 127.0.0.1:cport
+                fwd_port = free_host_port(max(cport + 10000, 18080))
+                print(
+                    f"[ha-apps] web UI binds 127.0.0.1:{cport} inside the "
+                    f"container — forwarding via socat sidecar on "
+                    f"port {host_port}"
+                )
+                extra_ports.append(f"{host_port}:{fwd_port}")
+                run([DOCKER, "rm", "-f", cname], capture=True)
+                run_args = build_run_args(
+                    addon, args.slug, extra_ports=extra_ports
+                )
+                run(run_args)
+                _start_forwarder(cname, args.slug, fwd_port, cport)
+                webui_target = fwd_port
+                fwd = {"fwd_port": fwd_port, "target_port": cport}
+            else:
+                print(
+                    f"[ha-apps] no ingress here — republishing web UI "
+                    f"on port {host_port} (container port {cport})"
+                )
+                extra_ports.append(f"{host_port}:{cport}")
+                run([DOCKER, "rm", "-f", cname], capture=True)
+                run_args = build_run_args(
+                    addon, args.slug, extra_ports=extra_ports
+                )
+                run(run_args)
+                webui_target = cport
         else:
             print(
                 "[ha-apps] WARNING: ingress-only add-on and no listening "
@@ -1033,6 +1122,14 @@ def cmd_install(args):
         "version": addon["version"],
         "image": image,
         "webui_port": published_webui,
+        # container-side port the host port forwards to — differs from
+        # webui_port when the app binds loopback and a socat sidecar
+        # terminates the published port inside the netns
+        "webui_target": webui_target,
+        "fwd": fwd,
+        # raw publish specs without the detected webui entry — needed to
+        # reproduce the port mappings on update
+        "extra_publish": extra_publish,
         "webui": addon.get("webui"),
         # notes resolved against the real port — the catalog copy only
         # knows the generic autopublish hint
@@ -1135,7 +1232,7 @@ def _wait_tcp(port, host="127.0.0.1", timeout=60):
 
 def cmd_remove(args):
     cname = container_name(args.slug)
-    run([DOCKER, "rm", "-f", cname], capture=True)
+    run([DOCKER, "rm", "-f", cname, cname + "-fwd"], capture=True)
     meta = load_installed()
     meta.pop(args.slug, None)
     save_installed(meta)
@@ -1146,12 +1243,20 @@ def cmd_remove(args):
 
 
 def cmd_start_stop(args):
-    run([DOCKER, args.command, container_name(args.slug)])
+    cname = container_name(args.slug)
+    if args.command == "stop":
+        # forwarder first so no half-open proxy is left behind
+        run([DOCKER, "stop", cname + "-fwd"], check=False, capture=True)
+    run([DOCKER, args.command, cname])
+    if args.command in ("start", "restart"):
+        run([DOCKER, "start", cname + "-fwd"], check=False, capture=True)
     print(f"[ha-apps] {args.slug} {args.command}ed")
 
 
 def cmd_update(args):
-    addon = find_addon(args.slug)
+    # enrich merges installed.json state (webui_port/webui_target/fwd)
+    # so the recreate keeps the resolved port mapping
+    addon = enrich({args.slug: find_addon(args.slug)})[args.slug]
     image = addon["image"]
     if addon.get("build_dir"):
         print(f"[ha-apps] rebuilding {image} from {addon['build_dir']} ...")
@@ -1159,12 +1264,19 @@ def cmd_update(args):
     else:
         print(f"[ha-apps] pulling {image} ...")
         run([DOCKER, "pull", image])
-    run([DOCKER, "rm", "-f", container_name(args.slug)], capture=True)
-    run(build_run_args(addon, args.slug))
+    cname = container_name(args.slug)
+    run([DOCKER, "rm", "-f", cname, cname + "-fwd"], capture=True)
     meta = load_installed()
+    extra_publish = (meta.get(args.slug) or {}).get("extra_publish") or []
+    run(build_run_args(addon, args.slug, extra_ports=extra_publish))
     if args.slug in meta:
         meta[args.slug]["version"] = addon["version"]
         meta[args.slug]["image"] = image
+        fwd = meta[args.slug].get("fwd")
+        if fwd:
+            _start_forwarder(
+                cname, args.slug, fwd["fwd_port"], fwd["target_port"]
+            )
         save_installed(meta)
     print(f"[ha-apps] {args.slug} updated to {addon['version']}")
 
