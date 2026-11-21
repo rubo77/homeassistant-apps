@@ -1035,6 +1035,7 @@ class HaAppsPanel extends HTMLElement {
       details.fulldocs .md { margin-top:8px; padding:10px; border:1px solid #333; border-radius:8px; }
       #dback, #dback2 { margin:8px 0; }
       .dlgbtns { display:flex; gap:10px; justify-content:flex-end; margin-top:14px; }
+      .warnbox, .notebox, .okbox { margin-top:2px; }
       .warnbox { background:#78350f33; border:1px solid #b45309; border-radius:8px; padding:10px 14px; font-size:13px; }
       .warnbox ul { margin:6px 0 0; padding-left:18px; }
       .notebox { background:#0c4a6e33; border:1px solid #0369a1; border-radius:8px; padding:10px 14px; font-size:13px; margin-top:8px; }
